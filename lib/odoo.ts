@@ -1,5 +1,4 @@
 // lib/odoo.ts
-// Wrapper Odoo JSON-RPC - toute la logique API est ici
 
 export interface OdooConfig {
   url: string;
@@ -13,7 +12,6 @@ export interface OdooSession {
   config: OdooConfig;
 }
 
-// Appel JSON-RPC via notre proxy API route (évite CORS)
 async function rpc(
   config: OdooConfig,
   endpoint: string,
@@ -32,10 +30,12 @@ async function rpc(
   });
 
   const data = await res.json();
-  if (data.error) {
-    throw new Error(data.error);
+
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `Erreur ${res.status}`);
   }
-  return data.result;
+
+  return { result: data.result, sessionId: data.sessionId };
 }
 
 // === AUTH ===
@@ -44,25 +44,33 @@ export async function authenticate(
   login: string,
   password: string
 ): Promise<OdooSession> {
-  const result = await rpc(config, "/web/session/authenticate", {
+  const { result, sessionId: cookieSessionId } = await rpc(config, "/web/session/authenticate", {
     db: config.db,
     login,
     password,
   });
 
-  if (!result.uid || result.uid === false) {
+  if (!result || !result.uid || result.uid === false) {
     throw new Error("Identifiants incorrects");
   }
+
+  // Le session_id peut venir du cookie ou du body
+  const sid = cookieSessionId || result.session_id || "";
 
   return {
     uid: result.uid,
     name: result.name || result.username || login,
-    sessionId: result.session_id,
+    sessionId: sid,
     config,
   };
 }
 
-// === GENERIC CRUD ===
+// === GENERIC ===
+async function call(session: OdooSession, endpoint: string, params: any) {
+  const { result } = await rpc(session.config, endpoint, params, session.sessionId);
+  return result;
+}
+
 export async function searchRead(
   session: OdooSession,
   model: string,
@@ -71,17 +79,12 @@ export async function searchRead(
   limit = 0,
   order = ""
 ) {
-  return rpc(
-    session.config,
-    "/web/dataset/call_kw",
-    {
-      model,
-      method: "search_read",
-      args: [domain],
-      kwargs: { fields, limit, order },
-    },
-    session.sessionId
-  );
+  return call(session, "/web/dataset/call_kw", {
+    model,
+    method: "search_read",
+    args: [domain],
+    kwargs: { fields, limit, order },
+  });
 }
 
 export async function callMethod(
@@ -91,25 +94,21 @@ export async function callMethod(
   args: any[] = [],
   kwargs: any = {}
 ) {
-  return rpc(
-    session.config,
-    "/web/dataset/call_kw",
-    { model, method, args, kwargs },
-    session.sessionId
-  );
+  return call(session, "/web/dataset/call_kw", {
+    model,
+    method,
+    args,
+    kwargs,
+  });
 }
 
-export async function create(
-  session: OdooSession,
-  model: string,
-  values: any
-) {
-  return rpc(
-    session.config,
-    "/web/dataset/call_kw",
-    { model, method: "create", args: [values], kwargs: {} },
-    session.sessionId
-  );
+export async function create(session: OdooSession, model: string, values: any) {
+  return call(session, "/web/dataset/call_kw", {
+    model,
+    method: "create",
+    args: [values],
+    kwargs: {},
+  });
 }
 
 // === MÉTIERS ===
@@ -125,11 +124,7 @@ export async function getProductByBarcode(session: OdooSession, barcode: string)
   return products[0] || null;
 }
 
-export async function getStockAtLocation(
-  session: OdooSession,
-  productId: number,
-  locationId: number
-) {
+export async function getStockAtLocation(session: OdooSession, productId: number, locationId: number) {
   return searchRead(
     session,
     "stock.quant",
@@ -167,15 +162,8 @@ export async function createInternalTransfer(
   session: OdooSession,
   sourceLocationId: number,
   destLocationId: number,
-  lines: {
-    productId: number;
-    productName: string;
-    qty: number;
-    uomId: number;
-    lotId?: number | null;
-  }[]
+  lines: { productId: number; productName: string; qty: number; uomId: number; lotId?: number | null }[]
 ) {
-  // Trouver le picking type interne
   const pickingTypes = await searchRead(
     session,
     "stock.picking.type",
@@ -190,9 +178,7 @@ export async function createInternalTransfer(
     location_id: sourceLocationId,
     location_dest_id: destLocationId,
     move_ids_without_package: lines.map((line) => [
-      0,
-      0,
-      {
+      0, 0, {
         name: line.productName,
         product_id: line.productId,
         product_uom_qty: line.qty,
@@ -204,7 +190,6 @@ export async function createInternalTransfer(
     ]),
   });
 
-  // Confirmer + assigner
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
   await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
 
