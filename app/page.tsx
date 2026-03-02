@@ -25,7 +25,7 @@ const T = {
 };
 
 // ============================================
-// ICONS (inline SVG)
+// ICONS
 // ============================================
 const Icon = {
   scan: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>,
@@ -37,6 +37,7 @@ const Icon = {
   back: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
   warehouse: <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 21h18M3 10h18M5 6l7-3 7 3M4 10v11M20 10v11M8 14v3M12 14v3M16 14v3"/></svg>,
   logout: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>,
+  lot: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg>,
 };
 
 // ============================================
@@ -47,14 +48,15 @@ export default function Page() {
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [scanFeedback, setScanFeedback] = useState<{ type: string; message: string } | null>(null);
   const [locations, setLocations] = useState<any[]>([]);
 
   // Transfer state
   const [sourceLocation, setSourceLocation] = useState<any>(null);
   const [destLocation, setDestLocation] = useState<any>(null);
   const [transferLines, setTransferLines] = useState<any[]>([]);
-  const [scanMode, setScanMode] = useState<"source" | "dest" | "product">("source");
   const [lastProduct, setLastProduct] = useState<any>(null);
+  const [lastLot, setLastLot] = useState<any>(null);
   const [stockInfo, setStockInfo] = useState<any[]>([]);
 
   // === HANDLERS ===
@@ -85,10 +87,11 @@ export default function Page() {
     setSourceLocation(null);
     setDestLocation(null);
     setTransferLines([]);
-    setScanMode("source");
     setLastProduct(null);
+    setLastLot(null);
     setStockInfo([]);
     setError("");
+    setScanFeedback(null);
   };
 
   const startTransfer = () => {
@@ -96,24 +99,61 @@ export default function Page() {
     setScreen("scan");
   };
 
-  const handleScan = async (barcode: string) => {
-    if (!barcode || !session) return;
+  // === SMART SCAN ===
+  const handleSmartScan = async (code: string) => {
+    if (!code || !session) return;
     setLoading(true);
     setError("");
+    setScanFeedback(null);
+    setLastProduct(null);
+    setLastLot(null);
+    setStockInfo([]);
+
     try {
-      if (scanMode === "source" || scanMode === "dest") {
-        const loc = await odoo.getLocationByBarcode(session, barcode);
-        if (!loc) { setError(`Emplacement introuvable : ${barcode}`); setLoading(false); return; }
-        if (scanMode === "source") { setSourceLocation(loc); setScanMode("dest"); }
-        else { setDestLocation(loc); setScanMode("product"); }
-      } else {
-        const product = await odoo.getProductByBarcode(session, barcode);
-        if (!product) { setError(`Produit introuvable : ${barcode}`); setLoading(false); return; }
-        setLastProduct(product);
-        if (sourceLocation) {
-          const quants = await odoo.getStockAtLocation(session, product.id, sourceLocation.id);
+      const result = await odoo.smartScan(session, code);
+
+      switch (result.type) {
+        case "location":
+          if (!sourceLocation) {
+            setSourceLocation(result.data);
+            setScanFeedback({ type: "success", message: `📍 Source : ${result.data.complete_name || result.data.name}` });
+          } else if (!destLocation) {
+            setDestLocation(result.data);
+            setScanFeedback({ type: "success", message: `📍 Destination : ${result.data.complete_name || result.data.name}` });
+          } else {
+            setScanFeedback({ type: "info", message: `📍 Emplacement détecté : ${result.data.complete_name || result.data.name} (source et dest déjà définies)` });
+          }
+          break;
+
+        case "product":
+          if (!sourceLocation) {
+            setScanFeedback({ type: "warning", message: "Scanne d'abord un emplacement source" });
+            break;
+          }
+          setLastProduct(result.data);
+          setScanFeedback({ type: "success", message: `📦 ${result.data.name} (${result.data.default_code || result.data.barcode})` });
+          // Charger le stock sur l'emplacement source
+          const quants = await odoo.getStockAtLocation(session, result.data.id, sourceLocation.id);
           setStockInfo(quants);
-        }
+          break;
+
+        case "lot":
+          if (!sourceLocation) {
+            setScanFeedback({ type: "warning", message: "Scanne d'abord un emplacement source" });
+            break;
+          }
+          setLastProduct(result.data.product);
+          setLastLot(result.data.lot);
+          setScanFeedback({ type: "success", message: `🏷️ Lot ${result.data.lot.name} → ${result.data.product?.name || "Produit inconnu"}` });
+          if (result.data.product) {
+            const lotQuants = await odoo.getStockAtLocation(session, result.data.product.id, sourceLocation.id);
+            setStockInfo(lotQuants);
+          }
+          break;
+
+        case "not_found":
+          setScanFeedback({ type: "error", message: `❌ "${code}" non reconnu (ni emplacement, ni produit, ni réf, ni lot)` });
+          break;
       }
     } catch (e: any) {
       setError(e.message);
@@ -122,8 +162,13 @@ export default function Page() {
   };
 
   const selectLocation = (loc: any) => {
-    if (scanMode === "source") { setSourceLocation(loc); setScanMode("dest"); }
-    else if (scanMode === "dest") { setDestLocation(loc); setScanMode("product"); }
+    if (!sourceLocation) {
+      setSourceLocation(loc);
+      setScanFeedback({ type: "success", message: `📍 Source : ${loc.complete_name || loc.name}` });
+    } else if (!destLocation) {
+      setDestLocation(loc);
+      setScanFeedback({ type: "success", message: `📍 Destination : ${loc.complete_name || loc.name}` });
+    }
   };
 
   const addLine = (qty: number) => {
@@ -135,9 +180,13 @@ export default function Page() {
       qty,
       uomId: lastProduct.uom_id[0],
       uomName: lastProduct.uom_id[1],
+      lotId: lastLot?.id || null,
+      lotName: lastLot?.name || null,
     }]);
     setLastProduct(null);
+    setLastLot(null);
     setStockInfo([]);
+    setScanFeedback(null);
   };
 
   const removeLine = (i: number) => setTransferLines((prev) => prev.filter((_, idx) => idx !== i));
@@ -150,7 +199,7 @@ export default function Page() {
       const pickingId = await odoo.createInternalTransfer(
         session, sourceLocation.id, destLocation.id, transferLines
       );
-      try { await odoo.validatePicking(session, pickingId); } catch {}
+      await odoo.validatePicking(session, pickingId);
       setScreen("confirm");
     } catch (e: any) {
       setError(e.message);
@@ -169,6 +218,9 @@ export default function Page() {
     margin: "0 auto",
   };
 
+  // Determine current step
+  const currentStep = !sourceLocation ? "source" : !destLocation ? "dest" : "product";
+
   // LOGIN
   if (screen === "login") return <LoginScreen onLogin={handleLogin} loading={loading} error={error} />;
 
@@ -180,7 +232,7 @@ export default function Page() {
         <div style={{ width: 80, height: 80, borderRadius: "50%", background: T.successDim, border: `2px solid ${T.success}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={T.success} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
         </div>
-        <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Transfert créé !</h2>
+        <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Transfert validé !</h2>
         <p style={{ color: T.textDim, fontSize: 13, marginBottom: 30 }}>
           {transferLines.length} ligne(s) • {sourceLocation?.name} → {destLocation?.name}
         </p>
@@ -198,7 +250,7 @@ export default function Page() {
         <div style={{ textAlign: "center", padding: "40px 0 30px" }}>
           <div style={{ color: T.accent, marginBottom: 16, display: "flex", justifyContent: "center" }}>{Icon.warehouse}</div>
           <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>WMS Scanner</h1>
-          <p style={{ color: T.textDim, fontSize: 13 }}>Transfert interne avec stock en temps réel</p>
+          <p style={{ color: T.textDim, fontSize: 13 }}>Scan intelligent — détecte tout automatiquement</p>
         </div>
         <button style={{ ...btnStyle(), display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }} onClick={startTransfer}>
           {Icon.scan} Nouveau transfert
@@ -221,7 +273,7 @@ export default function Page() {
           {(["source", "dest", "product"] as const).map((step, i) => (
             <div key={step} style={{
               flex: 1, height: 3, borderRadius: 2,
-              background: scanMode === step ? T.accent : (["source","dest","product"].indexOf(scanMode) > i ? T.success : T.border),
+              background: currentStep === step ? T.accent : (["source","dest","product"].indexOf(currentStep) > i ? T.success : T.border),
             }}/>
           ))}
         </div>
@@ -244,15 +296,44 @@ export default function Page() {
           </div>
         )}
 
-        {/* Scan input */}
-        <ScanInput mode={scanMode} onScan={handleScan} loading={loading} locations={locations} onSelectLocation={selectLocation} />
+        {/* SINGLE SMART SCAN INPUT */}
+        <SmartScanInput
+          onScan={handleSmartScan}
+          loading={loading}
+          currentStep={currentStep}
+          locations={locations}
+          onSelectLocation={selectLocation}
+        />
+
+        {/* Scan feedback */}
+        {scanFeedback && (
+          <div style={{
+            ...cardStyle(),
+            background: scanFeedback.type === "success" ? T.successDim
+              : scanFeedback.type === "warning" ? T.warningDim
+              : scanFeedback.type === "error" ? T.dangerDim
+              : T.accentDim,
+            borderColor: scanFeedback.type === "success" ? "rgba(52,211,153,0.3)"
+              : scanFeedback.type === "warning" ? "rgba(251,191,36,0.3)"
+              : scanFeedback.type === "error" ? "rgba(248,113,113,0.3)"
+              : "rgba(34,211,238,0.3)",
+            color: scanFeedback.type === "success" ? T.success
+              : scanFeedback.type === "warning" ? T.warning
+              : scanFeedback.type === "error" ? T.danger
+              : T.accent,
+            fontSize: 13,
+            textAlign: "center",
+          }}>
+            {scanFeedback.message}
+          </div>
+        )}
 
         {/* Error */}
         {error && <div style={{ ...cardStyle(), background: T.dangerDim, borderColor: "rgba(248,113,113,0.3)", color: T.danger, fontSize: 13, textAlign: "center" }}>{error}</div>}
 
         {/* Product + Stock */}
-        {lastProduct && scanMode === "product" && (
-          <ProductStockCard product={lastProduct} stockInfo={stockInfo} sourceLocation={sourceLocation} onAdd={addLine} />
+        {lastProduct && (
+          <ProductStockCard product={lastProduct} lot={lastLot} stockInfo={stockInfo} sourceLocation={sourceLocation} onAdd={addLine} />
         )}
 
         {/* Transfer lines */}
@@ -264,18 +345,30 @@ export default function Page() {
                 <span style={{ color: T.accent }}>{Icon.box}</span>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{line.productName}</div>
-                  <div style={{ fontSize: 11, color: T.textDim }}>{line.productCode} • {line.qty} {line.uomName}</div>
+                  <div style={{ fontSize: 11, color: T.textDim }}>
+                    {line.productCode} • {line.qty} {line.uomName}
+                    {line.lotName && <span style={{ color: T.accent }}> • Lot {line.lotName}</span>}
+                  </div>
                 </div>
                 <button onClick={() => removeLine(i)} style={{ background: "transparent", border: "none", color: T.danger, cursor: "pointer", padding: 4 }}>{Icon.trash}</button>
               </div>
             ))}
-            <button
-              style={{ ...btnStyle(`linear-gradient(135deg, ${T.success}, #10b981)`), marginTop: 12 }}
-              onClick={handleValidate}
-              disabled={loading}
-            >
-              {loading ? "Envoi..." : `Valider (${transferLines.length} ligne${transferLines.length > 1 ? "s" : ""})`}
-            </button>
+
+            {!destLocation && (
+              <div style={{ ...cardStyle(), background: T.warningDim, borderColor: "rgba(251,191,36,0.3)", color: T.warning, fontSize: 12, textAlign: "center" }}>
+                Scanne un emplacement destination avant de valider
+              </div>
+            )}
+
+            {destLocation && (
+              <button
+                style={{ ...btnStyle(`linear-gradient(135deg, ${T.success}, #10b981)`), marginTop: 12 }}
+                onClick={handleValidate}
+                disabled={loading}
+              >
+                {loading ? "Envoi..." : `Valider (${transferLines.length} ligne${transferLines.length > 1 ? "s" : ""})`}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -362,22 +455,25 @@ function LoginScreen({ onLogin, loading, error }: { onLogin: (url: string, db: s
   );
 }
 
-function ScanInput({ mode, onScan, loading, locations, onSelectLocation }: any) {
+function SmartScanInput({ onScan, loading, currentStep, locations, onSelectLocation }: any) {
   const ref = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState("");
   const [showPicker, setShowPicker] = useState(false);
   const [filter, setFilter] = useState("");
 
-  useEffect(() => { ref.current?.focus(); setValue(""); }, [mode]);
+  useEffect(() => { ref.current?.focus(); }, [currentStep]);
 
-  const labels: Record<string, string> = {
-    source: "Scanner l'emplacement source",
-    dest: "Scanner l'emplacement destination",
-    product: "Scanner un produit",
+  const hints: Record<string, string> = {
+    source: "Scanne un emplacement source, une réf, un code-barres, ou un lot...",
+    dest: "Scanne un emplacement destination, ou continue avec les produits...",
+    product: "Scanne un produit, une réf, un lot, ou un emplacement...",
   };
 
   const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && value.trim()) { onScan(value.trim()); setValue(""); }
+    if (e.key === "Enter" && value.trim()) {
+      onScan(value.trim());
+      setValue("");
+    }
   };
 
   const filtered = locations.filter((l: any) =>
@@ -387,9 +483,9 @@ function ScanInput({ mode, onScan, loading, locations, onSelectLocation }: any) 
 
   return (
     <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-        <label style={{ ...labelStyle(), marginBottom: 0 }}>{labels[mode]}</label>
-        {loading && <span style={{ fontSize: 11, color: T.accent }}>...</span>}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <label style={{ ...labelStyle(), marginBottom: 0 }}>Scan intelligent</label>
+        {loading && <span style={{ fontSize: 11, color: T.accent, animation: "pulse 1s infinite" }}>Recherche...</span>}
       </div>
       <input
         ref={ref}
@@ -403,33 +499,34 @@ function ScanInput({ mode, onScan, loading, locations, onSelectLocation }: any) 
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKey}
-        placeholder={mode === "product" ? "Code-barres produit..." : "Code-barres emplacement..."}
+        placeholder="Code-barres / Réf / Lot..."
         autoFocus
       />
-      {(mode === "source" || mode === "dest") && (
-        <>
-          <button style={{ ...btnSecondary(), marginTop: 8, fontSize: 12 }} onClick={() => setShowPicker(!showPicker)}>
-            {showPicker ? "Fermer" : "Choisir manuellement"}
-          </button>
-          {showPicker && (
-            <div style={{ ...cardStyle(), marginTop: 8, maxHeight: 200, overflowY: "auto" as const }}>
-              <input style={{ ...inputStyle(), marginBottom: 8, fontSize: 12 }} placeholder="Filtrer..." value={filter} onChange={(e) => setFilter(e.target.value)} />
-              {filtered.slice(0, 20).map((loc: any) => (
-                <button key={loc.id} onClick={() => { onSelectLocation(loc); setShowPicker(false); setFilter(""); }}
-                  style={{ display: "block", width: "100%", padding: "8px 10px", background: "transparent", border: "none", borderBottom: `1px solid ${T.border}`, color: T.text, fontSize: 12, textAlign: "left" as const, cursor: "pointer", fontFamily: "inherit" }}>
-                  <span style={{ fontWeight: 600 }}>{loc.complete_name || loc.name}</span>
-                  {loc.barcode && <span style={{ color: T.textDim, marginLeft: 8 }}>[{loc.barcode}]</span>}
-                </button>
-              ))}
-            </div>
-          )}
-        </>
+      <p style={{ fontSize: 11, color: T.textMuted, textAlign: "center", marginTop: 6 }}>
+        {hints[currentStep]}
+      </p>
+
+      {/* Manual location picker */}
+      <button style={{ ...btnSecondary(), marginTop: 4, fontSize: 12 }} onClick={() => setShowPicker(!showPicker)}>
+        {showPicker ? "Fermer" : "Choisir un emplacement manuellement"}
+      </button>
+      {showPicker && (
+        <div style={{ ...cardStyle(), marginTop: 8, maxHeight: 200, overflowY: "auto" as const }}>
+          <input style={{ ...inputStyle(), marginBottom: 8, fontSize: 12 }} placeholder="Filtrer..." value={filter} onChange={(e) => setFilter(e.target.value)} />
+          {filtered.slice(0, 20).map((loc: any) => (
+            <button key={loc.id} onClick={() => { onSelectLocation(loc); setShowPicker(false); setFilter(""); }}
+              style={{ display: "block", width: "100%", padding: "8px 10px", background: "transparent", border: "none", borderBottom: `1px solid ${T.border}`, color: T.text, fontSize: 12, textAlign: "left" as const, cursor: "pointer", fontFamily: "inherit" }}>
+              <span style={{ fontWeight: 600 }}>{loc.complete_name || loc.name}</span>
+              {loc.barcode && <span style={{ color: T.textDim, marginLeft: 8 }}>[{loc.barcode}]</span>}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function ProductStockCard({ product, stockInfo, sourceLocation, onAdd }: any) {
+function ProductStockCard({ product, lot, stockInfo, sourceLocation, onAdd }: any) {
   const [qty, setQty] = useState("1");
   const totalStock = stockInfo.reduce((s: number, q: any) => s + q.quantity, 0);
   const totalReserved = stockInfo.reduce((s: number, q: any) => s + (q.reserved_quantity || 0), 0);
@@ -442,11 +539,19 @@ function ProductStockCard({ product, stockInfo, sourceLocation, onAdd }: any) {
         <div style={{ width: 44, height: 44, borderRadius: 10, background: T.accentDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{Icon.box}</div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 2 }}>{product.name}</div>
-          <div style={{ fontSize: 11, color: T.textDim }}>{product.default_code} • {product.barcode}</div>
+          <div style={{ fontSize: 11, color: T.textDim }}>
+            {product.default_code && <span>Réf: {product.default_code} • </span>}
+            {product.barcode && <span>EAN: {product.barcode}</span>}
+          </div>
+          {lot && (
+            <div style={{ fontSize: 11, color: T.accent, marginTop: 2 }}>
+              🏷️ Lot: {lot.name}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* STOCK - la feature principale */}
+      {/* STOCK INFO */}
       <div style={{
         background: available > 0 ? T.successDim : T.warningDim,
         border: `1px solid ${available > 0 ? "rgba(52,211,153,0.3)" : "rgba(251,191,36,0.3)"}`,
@@ -480,7 +585,7 @@ function ProductStockCard({ product, stockInfo, sourceLocation, onAdd }: any) {
         )}
       </div>
 
-      {/* Qty input */}
+      {/* Qty + add */}
       <div style={{ display: "flex", gap: 8 }}>
         <div style={{ flex: 1 }}>
           <label style={labelStyle()}>Quantité</label>
@@ -493,7 +598,7 @@ function ProductStockCard({ product, stockInfo, sourceLocation, onAdd }: any) {
           </button>
         </div>
       </div>
-      {available <= 0 && <div style={{ marginTop: 8, fontSize: 11, color: T.warning, textAlign: "center" as const }}>Stock insuffisant</div>}
+      {available <= 0 && <div style={{ marginTop: 8, fontSize: 11, color: T.warning, textAlign: "center" as const }}>Stock insuffisant sur cet emplacement</div>}
     </div>
   );
 }

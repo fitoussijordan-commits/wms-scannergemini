@@ -54,7 +54,6 @@ export async function authenticate(
     throw new Error("Identifiants incorrects");
   }
 
-  // Le session_id peut venir du cookie ou du body
   const sid = cookieSessionId || result.session_id || "";
 
   return {
@@ -111,18 +110,82 @@ export async function create(session: OdooSession, model: string, values: any) {
   });
 }
 
-// === MÉTIERS ===
+// ============================================
+// SMART SCAN - détecte automatiquement le type
+// Ordre: emplacement → produit barcode → produit ref → lot
+// ============================================
 
-export async function getProductByBarcode(session: OdooSession, barcode: string) {
-  const products = await searchRead(
+export type ScanResult =
+  | { type: "location"; data: any }
+  | { type: "product"; data: any }
+  | { type: "lot"; data: { lot: any; product: any } }
+  | { type: "not_found"; code: string };
+
+export async function smartScan(session: OdooSession, code: string): Promise<ScanResult> {
+  // 1. Emplacement (par barcode)
+  const locations = await searchRead(
+    session,
+    "stock.location",
+    [["barcode", "=", code]],
+    ["id", "name", "complete_name", "barcode"],
+    1
+  );
+  if (locations.length > 0) {
+    return { type: "location", data: locations[0] };
+  }
+
+  // 2. Produit par code-barres EAN
+  const productsByBarcode = await searchRead(
     session,
     "product.product",
-    [["barcode", "=", barcode]],
+    [["barcode", "=", code]],
     ["id", "name", "barcode", "default_code", "uom_id", "tracking"],
     1
   );
-  return products[0] || null;
+  if (productsByBarcode.length > 0) {
+    return { type: "product", data: productsByBarcode[0] };
+  }
+
+  // 3. Produit par référence interne (default_code)
+  const productsByRef = await searchRead(
+    session,
+    "product.product",
+    [["default_code", "=", code]],
+    ["id", "name", "barcode", "default_code", "uom_id", "tracking"],
+    1
+  );
+  if (productsByRef.length > 0) {
+    return { type: "product", data: productsByRef[0] };
+  }
+
+  // 4. Lot / numéro de série
+  const lots = await searchRead(
+    session,
+    "stock.lot",
+    [["name", "=", code]],
+    ["id", "name", "product_id"],
+    1
+  );
+  if (lots.length > 0) {
+    const lotProductId = lots[0].product_id[0];
+    const lotProducts = await searchRead(
+      session,
+      "product.product",
+      [["id", "=", lotProductId]],
+      ["id", "name", "barcode", "default_code", "uom_id", "tracking"],
+      1
+    );
+    return {
+      type: "lot",
+      data: { lot: lots[0], product: lotProducts[0] || null },
+    };
+  }
+
+  // 5. Rien trouvé
+  return { type: "not_found", code };
 }
+
+// === MÉTIERS ===
 
 export async function getStockAtLocation(session: OdooSession, productId: number, locationId: number) {
   return searchRead(
@@ -145,17 +208,6 @@ export async function getLocations(session: OdooSession) {
     200,
     "complete_name"
   );
-}
-
-export async function getLocationByBarcode(session: OdooSession, barcode: string) {
-  const locations = await searchRead(
-    session,
-    "stock.location",
-    [["barcode", "=", barcode]],
-    ["id", "name", "complete_name", "barcode"],
-    1
-  );
-  return locations[0] || null;
 }
 
 export async function createInternalTransfer(
@@ -197,5 +249,19 @@ export async function createInternalTransfer(
 }
 
 export async function validatePicking(session: OdooSession, pickingId: number) {
-  return callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
+  const result = await callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
+
+  // Gérer les wizards Odoo (immediate transfer, backorder)
+  if (result && typeof result === "object" && result.res_model) {
+    const wizardModel = result.res_model;
+    const wizardId = result.res_id;
+
+    if (wizardModel === "stock.immediate.transfer") {
+      await callMethod(session, "stock.immediate.transfer", "process", [[wizardId]]);
+    } else if (wizardModel === "stock.backorder.confirmation") {
+      await callMethod(session, "stock.backorder.confirmation", "process", [[wizardId]]);
+    }
+  }
+
+  return result;
 }
