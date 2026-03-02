@@ -143,6 +143,86 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 }
 
 // ============================================
+// PREPARATION — Outgoing pickings
+// ============================================
+
+const PICKING_FIELDS = [
+  "id", "name", "state", "scheduled_date", "date_deadline",
+  "partner_id", "origin", "picking_type_id",
+  "move_ids_without_package", "location_id", "location_dest_id",
+];
+
+// Get all outgoing pickings in confirmed/assigned state
+export async function getOutgoingPickings(session: OdooSession) {
+  // Find outgoing picking type(s)
+  const types = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+  if (!types.length) return [];
+  const typeIds = types.map((t: any) => t.id);
+
+  return searchRead(
+    session, "stock.picking",
+    [
+      ["picking_type_id", "in", typeIds],
+      ["state", "in", ["confirmed", "assigned"]],
+    ],
+    PICKING_FIELDS,
+    200,
+    "scheduled_date asc, id asc"
+  );
+}
+
+// Get move lines for a picking (what needs to be prepared)
+export async function getPickingMoveLines(session: OdooSession, pickingId: number) {
+  return searchRead(
+    session, "stock.move.line",
+    [["picking_id", "=", pickingId]],
+    ["id", "product_id", "lot_id", "location_id", "location_dest_id", "qty_done", "reserved_uom_qty"],
+    200,
+    "product_id"
+  );
+}
+
+// Get stock.moves for a picking (demand info)
+export async function getPickingMoves(session: OdooSession, pickingId: number) {
+  return searchRead(
+    session, "stock.move",
+    [["picking_id", "=", pickingId]],
+    ["id", "product_id", "product_uom_qty", "quantity_done", "product_uom", "state"],
+    200,
+    "product_id"
+  );
+}
+
+// Check availability (action_assign)
+export async function checkAvailability(session: OdooSession, pickingId: number) {
+  return callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
+}
+
+// Set qty_done on a move line
+export async function setMoveLineQtyDone(session: OdooSession, moveLineId: number, qtyDone: number, lotId?: number | null) {
+  const vals: any = { qty_done: qtyDone };
+  if (lotId) vals.lot_id = lotId;
+  return write(session, "stock.move.line", [moveLineId], vals);
+}
+
+// Auto-fill all move lines qty_done = reserved_uom_qty
+export async function autoFillPicking(session: OdooSession, pickingId: number) {
+  const moveLines = await getPickingMoveLines(session, pickingId);
+  for (const ml of moveLines) {
+    if ((!ml.qty_done || ml.qty_done === 0) && ml.reserved_uom_qty > 0) {
+      await write(session, "stock.move.line", [ml.id], { qty_done: ml.reserved_uom_qty });
+    }
+  }
+  return moveLines.length;
+}
+
+// Get the PDF report for a picking (bon de livraison)
+export async function getPickingReportUrl(session: OdooSession, pickingId: number): Promise<string> {
+  // Standard Odoo delivery slip report
+  return `${session.config.url}/report/pdf/stock.report_deliveryslip/${pickingId}`;
+}
+
+// ============================================
 // INTERNAL TRANSFER — Odoo 16 compatible
 // ============================================
 export async function createInternalTransfer(

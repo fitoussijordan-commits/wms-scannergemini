@@ -94,7 +94,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -119,8 +119,15 @@ export default function Page() {
   const [curProduct, setCurProduct] = useState<any>(null);
   const [curLot, setCurLot] = useState<any>(null);
   const [curStock, setCurStock] = useState<any[]>([]);
-  const [allStock, setAllStock] = useState<any[]>([]); // quick mode: stock across all locations
+  const [allStock, setAllStock] = useState<any[]>([]);
   const [feedback, setFeedback] = useState<{ t: string; m: string } | null>(null);
+
+  // Preparation state
+  const [pickings, setPickings] = useState<any[]>([]);
+  const [selectedPicking, setSelectedPicking] = useState<any>(null);
+  const [pickingMoves, setPickingMoves] = useState<any[]>([]);
+  const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
+  const [prepScanned, setPrepScanned] = useState<Set<number>>(new Set());
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
@@ -133,6 +140,7 @@ export default function Page() {
       if (transferMode === "classic") doClassicScan(code);
       else doQuickScan(code);
     }
+    else if (screen === "prepDetail") doPrepScan(code);
     setTimeout(() => {
       document.querySelectorAll("input").forEach((el) => {
         if (el.value === code || el.value.includes(code)) {
@@ -297,6 +305,118 @@ export default function Page() {
     try { await odoo.renameLocation(session, id, name); setLocations(await odoo.getLocations(session)); } catch {}
   };
 
+  // ===================== PREPARATION =====================
+  const loadPickings = async () => {
+    if (!session) return;
+    setLoading(true); setError("");
+    try {
+      const p = await odoo.getOutgoingPickings(session);
+      setPickings(p);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const openPicking = async (picking: any) => {
+    if (!session) return;
+    setLoading(true); setError("");
+    setSelectedPicking(picking);
+    setPrepScanned(new Set());
+    try {
+      const moves = await odoo.getPickingMoves(session, picking.id);
+      const mlines = await odoo.getPickingMoveLines(session, picking.id);
+      setPickingMoves(moves);
+      setPickingMoveLines(mlines);
+      // Mark already done lines as scanned
+      const done = new Set<number>();
+      mlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
+      setPrepScanned(done);
+      setScreen("prepDetail");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const doPrepScan = async (code: string) => {
+    if (!code || !session || !selectedPicking) return;
+    setError("");
+    try {
+      const r = await odoo.smartScan(session, code);
+      if (r.type === "product" || r.type === "lot") {
+        const productId = r.type === "product" ? r.data.id : r.data.product?.id;
+        const lotId = r.type === "lot" ? r.data.lot.id : null;
+        if (!productId) { showToast("Produit inconnu"); vibrateError(); return; }
+
+        // Find matching move line not yet scanned
+        const ml = pickingMoveLines.find((m: any) =>
+          m.product_id[0] === productId && !prepScanned.has(m.id) &&
+          (!lotId || !m.lot_id || m.lot_id[0] === lotId)
+        );
+        if (ml) {
+          const qtyToSet = ml.reserved_uom_qty || 1;
+          await odoo.setMoveLineQtyDone(session, ml.id, qtyToSet, lotId);
+          setPrepScanned(prev => new Set([...prev, ml.id]));
+          // Refresh move lines
+          setPickingMoveLines(await odoo.getPickingMoveLines(session, selectedPicking.id));
+          vibrateSuccess();
+          showToast(`✓ ${r.type === "lot" ? r.data.lot.name : r.data.name}`);
+        } else {
+          showToast("Déjà scanné ou pas dans cette commande");
+          vibrateError();
+        }
+      } else {
+        showToast(`"${code}" non trouvé dans cette commande`);
+        vibrateError();
+      }
+    } catch (e: any) { setError(e.message); vibrateError(); }
+  };
+
+  const autoFillPicking = async () => {
+    if (!session || !selectedPicking) return;
+    setLoading(true);
+    try {
+      await odoo.autoFillPicking(session, selectedPicking.id);
+      const mlines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+      setPickingMoveLines(mlines);
+      const done = new Set<number>();
+      mlines.forEach((ml: any) => { if (ml.qty_done > 0) done.add(ml.id); });
+      setPrepScanned(done);
+      vibrateSuccess();
+      showToast("Toutes les quantités remplies");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const validatePrepPicking = async () => {
+    if (!session || !selectedPicking) return;
+    setLoading(true); setError("");
+    try {
+      await odoo.validatePicking(session, selectedPicking.id);
+      vibrateSuccess();
+      showToast(`✅ ${selectedPicking.name} validé`);
+      setScreen("prep");
+      setSelectedPicking(null);
+      await loadPickings(); // refresh list
+    } catch (e: any) { setError(e.message); vibrateError(); }
+    setLoading(false);
+  };
+
+  const checkPickingAvailability = async (pickingId: number) => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      await odoo.checkAvailability(session, pickingId);
+      await loadPickings();
+      vibrateSuccess();
+      showToast("Disponibilité vérifiée");
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  const openPickingReport = (pickingId: number) => {
+    if (!session) return;
+    const url = odoo.getPickingReportUrl(session, pickingId);
+    window.open(url, "_blank");
+  };
+
   // ===================== RENDER =====================
   const classicStep = !src ? 0 : !dst ? 1 : 2;
 
@@ -322,6 +442,8 @@ export default function Page() {
 
           <div style={{ marginTop: 16 }}>
             <BigButton icon={transferIcon("#fff")} label="Transfert interne" sub="Déplacer du stock entre emplacements" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
+            <div style={{ height: 10 }} />
+            <BigButton icon={prepIcon} label="Préparation" sub="Commandes à préparer et expédier" color="#7c3aed" onClick={() => { loadPickings(); setScreen("prep"); }} />
           </div>
 
           {/* History */}
@@ -513,6 +635,36 @@ export default function Page() {
             <BigButton icon={transferIcon("#fff")} label="Nouveau transfert" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
             <button onClick={goHome} style={{ ...secondaryBtn, marginTop: 12 }}>Retour à l'accueil</button>
           </div>
+        )}
+
+        {/* ===== PREPARATION LIST ===== */}
+        {screen === "prep" && (
+          <PrepListScreen
+            pickings={pickings}
+            loading={loading}
+            error={error}
+            onOpen={openPicking}
+            onCheckAvail={checkPickingAvailability}
+            onRefresh={loadPickings}
+            onReport={openPickingReport}
+          />
+        )}
+
+        {/* ===== PREPARATION DETAIL ===== */}
+        {screen === "prepDetail" && selectedPicking && (
+          <PrepDetailScreen
+            picking={selectedPicking}
+            moves={pickingMoves}
+            moveLines={pickingMoveLines}
+            scanned={prepScanned}
+            loading={loading}
+            error={error}
+            onScan={doPrepScan}
+            onAutoFill={autoFillPicking}
+            onValidate={validatePrepPicking}
+            onBack={() => { setScreen("prep"); loadPickings(); }}
+            onReport={openPickingReport}
+          />
         )}
       </main>
     </Shell>
@@ -938,6 +1090,189 @@ function LocationResult({ location, stock }: { location: any; stock: any[] }) {
 // ============================================
 // LOGIN
 // ============================================
+// ============================================
+// PREPARATION LIST SCREEN
+// ============================================
+function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefresh, onReport }: any) {
+  // Group by scheduled_date
+  const grouped: Record<string, any[]> = {};
+  for (const p of pickings) {
+    const d = p.scheduled_date ? new Date(p.scheduled_date).toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }) : "Sans date";
+    if (!grouped[d]) grouped[d] = [];
+    grouped[d].push(p);
+  }
+
+  const stateLabel: Record<string, { text: string; color: string; bg: string }> = {
+    confirmed: { text: "En attente", color: C.orange, bg: C.orangeSoft },
+    assigned: { text: "Prêt", color: C.green, bg: C.greenSoft },
+  };
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Préparation</h2>
+          <p style={{ fontSize: 12, color: C.textMuted }}>{pickings.length} commande(s) en cours</p>
+        </div>
+        <button onClick={onRefresh} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        </button>
+      </div>
+
+      {error && <Alert type="error">{error}</Alert>}
+      {loading && pickings.length === 0 && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement...</div>}
+      {!loading && pickings.length === 0 && <Alert type="info">Aucune commande en attente ou prête</Alert>}
+
+      {Object.entries(grouped).map(([date, items]) => (
+        <div key={date} style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, marginBottom: 8, padding: "6px 12px", background: C.blueSoft, borderRadius: 8, display: "inline-block" }}>
+            📅 {date}
+          </div>
+          {items.map((p: any) => {
+            const st = stateLabel[p.state] || stateLabel.confirmed;
+            const moveCount = (p.move_ids_without_package || []).length;
+            return (
+              <div key={p.id} style={{ ...cardStyle, marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
+                    {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
+                    {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: st.color, background: st.bg, padding: "3px 8px", borderRadius: 6 }}>{st.text}</span>
+                </div>
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>{moveCount} article(s)</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => onOpen(p)} style={{ flex: 2, padding: "10px 0", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    Préparer
+                  </button>
+                  {p.state === "confirmed" && (
+                    <button onClick={() => onCheckAvail(p.id)} style={{ flex: 1, padding: "10px 0", background: C.orangeSoft, color: C.orange, border: `1px solid ${C.orangeBorder}`, borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      Vérifier
+                    </button>
+                  )}
+                  <button onClick={() => onReport(p.id)} style={{ padding: "10px 12px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                    🖨
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </>
+  );
+}
+
+// ============================================
+// PREPARATION DETAIL SCREEN
+// ============================================
+function PrepDetailScreen({ picking, moves, moveLines, scanned, loading, error, onScan, onAutoFill, onValidate, onBack, onReport }: any) {
+  const totalLines = moveLines.length;
+  const doneLines = moveLines.filter((ml: any) => ml.qty_done > 0).length;
+  const progress = totalLines > 0 ? Math.round((doneLines / totalLines) * 100) : 0;
+  const allDone = totalLines > 0 && doneLines === totalLines;
+
+  // Group moves by product for display
+  const movesByProduct = moves.map((m: any) => {
+    const relatedLines = moveLines.filter((ml: any) => ml.product_id[0] === m.product_id[0]);
+    const totalDone = relatedLines.reduce((s: number, ml: any) => s + (ml.qty_done || 0), 0);
+    return { ...m, relatedLines, totalDone };
+  });
+
+  return (
+    <>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{picking.name}</div>
+          {picking.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{picking.partner_id[1]}</div>}
+          {picking.origin && <div style={{ fontSize: 11, color: C.textMuted }}>{picking.origin}</div>}
+        </div>
+        <button onClick={() => onReport(picking.id)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        </button>
+      </div>
+
+      {/* Progress */}
+      <Section>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Progression</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: allDone ? C.green : C.blue }}>{doneLines}/{totalLines}</span>
+        </div>
+        <div style={{ height: 8, borderRadius: 4, background: C.bg, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${progress}%`, borderRadius: 4, background: allDone ? C.green : C.blue, transition: "width .3s" }} />
+        </div>
+        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 4 }}>{progress}% préparé</div>
+      </Section>
+
+      {/* Scan input */}
+      <Section>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Scanner un article</span>
+          {loading && <Spinner />}
+        </div>
+        <InputBar onSubmit={onScan} placeholder="Code-barres, réf, lot..." />
+      </Section>
+
+      {error && <Alert type="error">{error}</Alert>}
+
+      {/* Move lines */}
+      <Section>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
+        {movesByProduct.map((m: any, i: number) => {
+          const isDone = m.totalDone >= m.product_uom_qty;
+          return (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: i < movesByProduct.length - 1 ? `1px solid ${C.border}` : "none" }}>
+              <div style={{ width: 32, height: 32, borderRadius: 8, background: isDone ? C.greenSoft : C.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                {isDone
+                  ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.green} strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  : boxIcon(C.textMuted, 14)
+                }
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: isDone ? C.green : C.text }}>{m.product_id[1]}</div>
+                {m.relatedLines.map((ml: any, j: number) => (
+                  <div key={j} style={{ fontSize: 11, color: C.textMuted }}>
+                    {ml.lot_id ? `Lot ${ml.lot_id[1]} · ` : ""}
+                    {ml.location_id?.[1] || ""}
+                  </div>
+                ))}
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: isDone ? C.green : C.text }}>{m.totalDone} / {m.product_uom_qty}</div>
+                <div style={{ fontSize: 10, color: C.textMuted }}>{m.product_uom?.[1] || ""}</div>
+              </div>
+            </div>
+          );
+        })}
+      </Section>
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <button onClick={onAutoFill} disabled={loading || allDone} style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", opacity: allDone ? 0.5 : 1 }}>
+          Tout remplir
+        </button>
+        <button onClick={() => onReport(picking.id)} style={{ padding: "12px 16px", background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+          Bon de livraison
+        </button>
+      </div>
+
+      <BigButton
+        icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+        label={loading ? "Envoi..." : "Valider la préparation"}
+        sub={`${doneLines}/${totalLines} articles préparés`}
+        color={allDone ? C.green : C.orange}
+        onClick={onValidate}
+        disabled={loading || doneLines === 0}
+      />
+    </>
+  );
+}
+
 function Login({ onLogin, loading, error }: { onLogin: (u: string, d: string, l: string, p: string) => void; loading: boolean; error: string }) {
   const cfg = typeof window !== "undefined" ? loadCfg() : null;
   const [url, setUrl] = useState(cfg?.u || ""); const [db, setDb] = useState(cfg?.d || "");
@@ -1016,4 +1351,7 @@ const trashIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" st
 const editIcon = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
 const clockIcon = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
 const transferIcon = (c: string) => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/></svg>;
+const prepIcon = <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 11l3 3L22 4"/><line x1="9" y1="17" x2="9" y2="17"/><line x1="13" y1="17" x2="13" y2="17"/></svg>;
 const boxIcon = (c: string, s: number) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/></svg>;
+
+const cardStyle: React.CSSProperties = { background: C.white, borderRadius: 14, padding: 16, border: `1px solid ${C.border}`, boxShadow: C.shadow };
