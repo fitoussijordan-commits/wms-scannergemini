@@ -42,7 +42,12 @@ export async function write(session: OdooSession, model: string, ids: number[], 
 }
 
 // ============================================
-// SMART SCAN — cherche aussi les produits archivés
+// PRODUCT FIELDS
+// ============================================
+const PRODUCT_FIELDS = ["id", "name", "barcode", "default_code", "uom_id", "tracking", "active"];
+
+// ============================================
+// SMART SCAN — with archived product fallback
 // ============================================
 export type ScanResult =
   | { type: "location"; data: any }
@@ -50,77 +55,95 @@ export type ScanResult =
   | { type: "lot"; data: { lot: any; product: any } }
   | { type: "not_found"; code: string };
 
-const PRODUCT_FIELDS = ["id", "name", "barcode", "default_code", "uom_id", "tracking", "active"];
-
 export async function smartScan(session: OdooSession, code: string): Promise<ScanResult> {
-  // 1. Emplacement
+  // 1. Location by barcode
   const locs = await searchRead(session, "stock.location", [["barcode", "=", code]], ["id", "name", "complete_name", "barcode"], 1);
   if (locs.length) return { type: "location", data: locs[0] };
 
-  // 2. Produit par barcode (actif + archivé)
-  let products = await searchRead(session, "product.product", [["barcode", "=", code]], PRODUCT_FIELDS, 1);
-  if (!products.length) {
-    // Chercher dans les archivés
-    products = await searchRead(session, "product.product", [["barcode", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
-  }
-  if (products.length) return { type: "product", data: products[0] };
+  // 2. Product by barcode (active)
+  const byBC = await searchRead(session, "product.product", [["barcode", "=", code]], PRODUCT_FIELDS, 1);
+  if (byBC.length) return { type: "product", data: byBC[0] };
 
-  // 3. Produit par référence (actif + archivé)
-  let byRef = await searchRead(session, "product.product", [["default_code", "=", code]], PRODUCT_FIELDS, 1);
-  if (!byRef.length) {
-    byRef = await searchRead(session, "product.product", [["default_code", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
-  }
+  // 3. Product by reference (active)
+  const byRef = await searchRead(session, "product.product", [["default_code", "=", code]], PRODUCT_FIELDS, 1);
   if (byRef.length) return { type: "product", data: byRef[0] };
 
   // 4. Lot
   const lots = await searchRead(session, "stock.lot", [["name", "=", code]], ["id", "name", "product_id"], 1);
   if (lots.length) {
     let prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]]], PRODUCT_FIELDS, 1);
-    if (!prod.length) {
-      prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]], ["active", "=", false]], PRODUCT_FIELDS, 1);
-    }
+    // Fallback: archived product
+    if (!prod.length) prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]], ["active", "=", false]], PRODUCT_FIELDS, 1);
     return { type: "lot", data: { lot: lots[0], product: prod[0] || null } };
   }
+
+  // 5. Fallback: archived product by barcode
+  const archivedBC = await searchRead(session, "product.product", [["barcode", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  if (archivedBC.length) return { type: "product", data: archivedBC[0] };
+
+  // 6. Fallback: archived product by reference
+  const archivedRef = await searchRead(session, "product.product", [["default_code", "=", code], ["active", "=", false]], PRODUCT_FIELDS, 1);
+  if (archivedRef.length) return { type: "product", data: archivedRef[0] };
+
   return { type: "not_found", code };
 }
 
 // ============================================
-// STOCK QUERIES
+// STOCK QUERIES — INTERNAL LOCATIONS ONLY
 // ============================================
+
+// All stock for a product across all internal locations
 export async function getAllStockForProduct(session: OdooSession, productId: number) {
-  return searchRead(session, "stock.quant",
+  return searchRead(
+    session, "stock.quant",
     [["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
-    ["location_id", "lot_id", "quantity", "reserved_quantity"], 500, "location_id");
+    ["location_id", "lot_id", "quantity", "reserved_quantity"],
+    500, "location_id"
+  );
 }
 
+// Stock for a specific lot across internal locations
 export async function getStockForLot(session: OdooSession, lotId: number, productId: number) {
-  return searchRead(session, "stock.quant",
+  return searchRead(
+    session, "stock.quant",
     [["lot_id", "=", lotId], ["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
-    ["location_id", "lot_id", "quantity", "reserved_quantity"], 200, "location_id");
+    ["location_id", "lot_id", "quantity", "reserved_quantity"],
+    200, "location_id"
+  );
 }
 
+// Stock at a specific location (for transfer mode)
 export async function getStockAtLocation(session: OdooSession, productId: number, locationId: number) {
-  return searchRead(session, "stock.quant",
+  return searchRead(
+    session, "stock.quant",
     [["product_id", "=", productId], ["location_id", "=", locationId]],
-    ["quantity", "lot_id", "reserved_quantity"]);
+    ["quantity", "lot_id", "reserved_quantity"]
+  );
 }
 
+// All products at a location
 export async function getProductsAtLocation(session: OdooSession, locationId: number) {
-  return searchRead(session, "stock.quant",
+  return searchRead(
+    session, "stock.quant",
     [["location_id", "=", locationId], ["quantity", "!=", 0]],
-    ["product_id", "lot_id", "quantity", "reserved_quantity"], 500, "product_id");
+    ["product_id", "lot_id", "quantity", "reserved_quantity"],
+    500, "product_id"
+  );
 }
 
 export async function getLocations(session: OdooSession) {
   return searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id", "name", "complete_name", "barcode"], 500, "complete_name");
 }
 
+// ============================================
+// RENAME LOCATION
+// ============================================
 export async function renameLocation(session: OdooSession, locationId: number, newName: string) {
   return write(session, "stock.location", [locationId], { name: newName });
 }
 
 // ============================================
-// TRANSFER
+// INTERNAL TRANSFER — Odoo 16 compatible
 // ============================================
 export async function createInternalTransfer(
   session: OdooSession,
@@ -148,12 +171,13 @@ export async function createInternalTransfer(
   await callMethod(session, "stock.picking", "action_confirm", [[pickingId]]);
   await callMethod(session, "stock.picking", "action_assign", [[pickingId]]);
 
-  // Écrire qty_done et lots sur les move lines
+  // Read move lines — Odoo 16: only safe fields (no product_uom_qty on stock.move.line)
   const moveLines = await searchRead(session, "stock.move.line",
     [["picking_id", "=", pickingId]],
     ["id", "product_id", "lot_id", "qty_done"]
   );
 
+  // Write qty_done and lot on each move line
   for (const ml of moveLines) {
     const matchingLine = lines.find(l => l.productId === ml.product_id[0]);
     if (matchingLine) {
@@ -169,6 +193,7 @@ export async function createInternalTransfer(
 export async function validatePicking(session: OdooSession, pickingId: number) {
   const result = await callMethod(session, "stock.picking", "button_validate", [[pickingId]]);
 
+  // Handle Odoo wizards
   if (result && typeof result === "object" && result.res_model) {
     const wizardModel = result.res_model;
     const wizardId = result.res_id;
