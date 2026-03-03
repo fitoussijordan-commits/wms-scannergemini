@@ -24,27 +24,21 @@ const LABEL_SIZE_KEY = "wms_label_size";
 const DEFAULT_SIZE: LabelSize = { widthMM: 70, heightMM: 45 };
 
 export function getLabelSize(): LabelSize {
-  try {
-    const v = localStorage.getItem(LABEL_SIZE_KEY);
-    return v ? JSON.parse(v) : DEFAULT_SIZE;
-  } catch { return DEFAULT_SIZE; }
+  try { const v = localStorage.getItem(LABEL_SIZE_KEY); return v ? JSON.parse(v) : DEFAULT_SIZE; }
+  catch { return DEFAULT_SIZE; }
 }
 
 export function saveLabelSize(size: LabelSize) {
   try { localStorage.setItem(LABEL_SIZE_KEY, JSON.stringify(size)); } catch {}
 }
 
-// Convert mm to dots (203 dpi: 1mm ≈ 8 dots)
 function mmToDots(mm: number): number { return Math.round(mm * 8); }
 
 // ============================================
-// PRINTER MANAGEMENT
+// PRINTER
 // ============================================
 export interface PrintNodePrinter {
-  id: number;
-  name: string;
-  description: string;
-  state: string;
+  id: number; name: string; description: string; state: string;
   computer: { id: number; name: string };
 }
 
@@ -53,10 +47,7 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
   if (!res.ok) throw new Error(`PrintNode erreur ${res.status}`);
   const data = await res.json();
   return data.map((p: any) => ({
-    id: p.id,
-    name: p.name,
-    description: p.description || "",
-    state: p.state,
+    id: p.id, name: p.name, description: p.description || "", state: p.state,
     computer: { id: p.computer?.id, name: p.computer?.name },
   }));
 }
@@ -64,22 +55,18 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 // PRINT JOB
 // ============================================
-interface PrintJobOptions {
-  printerId: number;
-  title: string;
-  content: string;
-  contentType: "raw_base64" | "pdf_base64";
-}
+async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
+  // Repeat ZPL for quantity
+  const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
 
-async function submitPrintJob(opts: PrintJobOptions): Promise<number> {
   const res = await fetch(`${API_URL}/printjobs`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({
-      printerId: opts.printerId,
-      title: opts.title,
-      contentType: opts.contentType,
-      content: opts.content,
+      printerId,
+      title,
+      contentType: "raw_base64",
+      content: btoa(fullZpl),
       source: "WMS Scanner",
     }),
   });
@@ -93,112 +80,148 @@ async function submitPrintJob(opts: PrintJobOptions): Promise<number> {
 // ============================================
 // ZPL HELPERS
 // ============================================
-function truncate(s: string, max: number): string {
+function trunc(s: string, max: number): string {
   return s.length > max ? s.substring(0, max - 1) : s;
 }
 
-function barcodeZPL(barcode: string, x: number, y: number, height: number): string {
+function barcodeZPL(barcode: string, x: number, y: number, height: number, barWidth: number = 3): string {
   const isEAN13 = /^\d{13}$/.test(barcode);
   const isEAN8 = /^\d{8}$/.test(barcode);
-  if (isEAN13) return `^BY2,2,${height}^FO${x},${y}^BE,${height},Y,N^FD${barcode}^FS`;
-  if (isEAN8) return `^BY2,2,${height}^FO${x},${y}^B8,${height},Y,N^FD${barcode}^FS`;
-  return `^BY2,2,${height}^FO${x},${y}^BC,${height},Y,N,N^FD${barcode}^FS`;
+  if (isEAN13) return `^BY${barWidth},3,${height}^FO${x},${y}^BEN,${height},Y,N^FD${barcode}^FS`;
+  if (isEAN8) return `^BY${barWidth},3,${height}^FO${x},${y}^B8N,${height},Y,N^FD${barcode}^FS`;
+  // Code 128
+  return `^BY${barWidth},3,${height}^FO${x},${y}^BCN,${height},Y,N,N^FD${barcode}^FS`;
 }
 
 // ============================================
-// ZPL TEMPLATES
+// PRODUCT LABEL: ref + name + BIG barcode + EAN
 // ============================================
-
-// PRODUCT: name + EAN barcode
-export function generateProductZPL(productName: string, barcode: string): string {
+export function generateProductZPL(productName: string, barcode: string, ref?: string): string {
   const sz = getLabelSize();
   const W = mmToDots(sz.widthMM);
   const H = mmToDots(sz.heightMM);
-  const cW = W - 20;
-  const cpl = Math.floor(cW / 12);
-  const name1 = truncate(productName, cpl);
-  const name2 = productName.length > cpl ? truncate(productName.substring(cpl), cpl) : "";
-  const fs = sz.widthMM >= 60 ? 28 : 22;
-  const bcH = Math.min(80, H - 140);
-  const bcY = name2 ? 70 : 55;
+  const cW = W - 30;
+  const cpl = Math.floor(cW / 13);
+
+  // Layout: content centered vertically
+  // ref (small) → name → barcode (big) → ean text
+  const refText = ref || "";
+  const name = trunc(productName, cpl);
+  const bcH = Math.min(Math.round(H * 0.38), 120); // 38% of label height
+  const barW = sz.widthMM >= 60 ? 3 : 2;
+
+  // Y positions — push content down to center
+  const totalContent = 24 + 28 + 8 + bcH + 20; // ref + name + gap + barcode + ean text
+  const startY = Math.max(10, Math.round((H - totalContent) / 2));
 
   return [
     "^XA", `^PW${W}`, `^LL${H}`,
-    `^FO10,15^A0N,${fs},${fs}^FB${cW},1,0,C^FD${name1}^FS`,
-    name2 ? `^FO10,${15 + fs + 4}^A0N,${fs - 4},${fs - 4}^FB${cW},1,0,C^FD${name2}^FS` : "",
-    barcodeZPL(barcode, 30, bcY, bcH),
+    // Ref (small, centered)
+    refText ? `^FO15,${startY}^A0N,22,22^FB${cW},1,0,C^FD${trunc(refText, cpl)}^FS` : "",
+    // Product name (bold, centered)
+    `^FO15,${startY + (refText ? 28 : 0)}^A0N,26,26^FB${cW},1,0,C^FD${name}^FS`,
+    // Barcode (BIG)
+    barcodeZPL(barcode, 20, startY + (refText ? 28 : 0) + 34, bcH, barW),
     "^XZ",
   ].filter(Boolean).join("\n");
 }
 
-// LOT: lot name (big) + product name + barcode
-export function generateLotZPL(lotName: string, productName: string, lotBarcode: string): string {
+// ============================================
+// LOT LABEL: lot name (big) + name + expiry + barcode
+// ============================================
+export function generateLotZPL(lotName: string, productName: string, lotBarcode: string, expiryDate?: string): string {
   const sz = getLabelSize();
   const W = mmToDots(sz.widthMM);
   const H = mmToDots(sz.heightMM);
-  const cW = W - 20;
-  const cpl = Math.floor(cW / 12);
-  const fs = sz.widthMM >= 60 ? 24 : 20;
-  const bcH = Math.min(70, H - 170);
-  const prodY = 58;
-  const bcY = prodY + fs * 2 + 12;
+  const cW = W - 30;
+  const cpl = Math.floor(cW / 13);
+  const bcH = Math.min(Math.round(H * 0.32), 100);
+  const barW = sz.widthMM >= 60 ? 3 : 2;
+
+  // Format expiry
+  const expStr = expiryDate ? formatDate(expiryDate) : "";
+
+  const totalContent = 32 + 24 + (expStr ? 22 : 0) + 8 + bcH + 18;
+  const startY = Math.max(8, Math.round((H - totalContent) / 2));
 
   return [
     "^XA", `^PW${W}`, `^LL${H}`,
-    `^FO10,12^A0N,32,32^FB${cW},1,0,C^FD${truncate(lotName, cpl)}^FS`,
-    `^FO20,48^GB${cW - 20},1,1^FS`,
-    `^FO10,${prodY}^A0N,${fs},${fs}^FB${cW},2,0,C^FD${truncate(productName, cpl * 2)}^FS`,
-    lotBarcode ? barcodeZPL(lotBarcode, 30, bcY, bcH) : "",
+    // Lot name (large bold)
+    `^FO15,${startY}^A0N,32,32^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`,
+    // Product name
+    `^FO15,${startY + 36}^A0N,22,22^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`,
+    // Expiry date
+    expStr ? `^FO15,${startY + 62}^A0N,22,22^FB${cW},1,0,C^FDDLUO: ${expStr}^FS` : "",
+    // Barcode
+    barcodeZPL(lotBarcode, 20, startY + 62 + (expStr ? 28 : 8), bcH, barW),
     "^XZ",
   ].filter(Boolean).join("\n");
 }
 
-// LOCATION: name (large) + barcode
+// ============================================
+// LOCATION LABEL: name (large) + barcode
+// ============================================
 export function generateLocationZPL(locationName: string, locationBarcode: string): string {
   const sz = getLabelSize();
   const W = mmToDots(sz.widthMM);
   const H = mmToDots(sz.heightMM);
-  const cW = W - 20;
-  const fs = sz.widthMM >= 60 ? 40 : 32;
-  const bcH = Math.min(90, H - 120);
+  const cW = W - 30;
+  const bcH = Math.min(Math.round(H * 0.4), 120);
+  const barW = sz.widthMM >= 60 ? 3 : 2;
+
+  const totalContent = 40 + 16 + bcH;
+  const startY = Math.max(10, Math.round((H - totalContent) / 2));
 
   return [
     "^XA", `^PW${W}`, `^LL${H}`,
-    `^FO10,15^A0N,${fs},${fs}^FB${cW},1,0,C^FD${locationName}^FS`,
-    locationBarcode ? barcodeZPL(locationBarcode, 30, 15 + fs + 20, bcH) : "",
+    // Location name (large)
+    `^FO15,${startY}^A0N,40,40^FB${cW},1,0,C^FD${locationName}^FS`,
+    // Barcode
+    locationBarcode ? barcodeZPL(locationBarcode, 20, startY + 52, bcH, barW) : "",
     "^XZ",
   ].filter(Boolean).join("\n");
 }
 
 // ============================================
-// PRINT FUNCTIONS
+// DATE HELPER
+// ============================================
+function formatDate(d: string): string {
+  try {
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return d;
+    return dt.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  } catch { return d; }
+}
+
+// ============================================
+// PRINT FUNCTIONS (with quantity)
 // ============================================
 export async function printProductLabel(
-  printerId: number, productName: string, barcode: string
+  printerId: number, productName: string, barcode: string, ref?: string, qty: number = 1
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
-    const zpl = generateProductZPL(productName, barcode);
-    const jobId = await submitPrintJob({ printerId, title: `Produit: ${productName}`, content: btoa(zpl), contentType: "raw_base64" });
+    const zpl = generateProductZPL(productName, barcode, ref);
+    const jobId = await submitPrintJob(printerId, `Produit: ${productName}`, zpl, qty);
     return { success: true, jobId };
   } catch (e: any) { return { success: false, error: e.message }; }
 }
 
 export async function printLotLabel(
-  printerId: number, lotName: string, productName: string, lotBarcode: string
+  printerId: number, lotName: string, productName: string, lotBarcode: string, expiryDate?: string, qty: number = 1
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
-    const zpl = generateLotZPL(lotName, productName, lotBarcode);
-    const jobId = await submitPrintJob({ printerId, title: `Lot: ${lotName}`, content: btoa(zpl), contentType: "raw_base64" });
+    const zpl = generateLotZPL(lotName, productName, lotBarcode, expiryDate);
+    const jobId = await submitPrintJob(printerId, `Lot: ${lotName}`, zpl, qty);
     return { success: true, jobId };
   } catch (e: any) { return { success: false, error: e.message }; }
 }
 
 export async function printLocationLabel(
-  printerId: number, locationName: string, locationBarcode: string
+  printerId: number, locationName: string, locationBarcode: string, qty: number = 1
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
     const zpl = generateLocationZPL(locationName, locationBarcode);
-    const jobId = await submitPrintJob({ printerId, title: `Empl: ${locationName}`, content: btoa(zpl), contentType: "raw_base64" });
+    const jobId = await submitPrintJob(printerId, `Empl: ${locationName}`, zpl, qty);
     return { success: true, jobId };
   } catch (e: any) { return { success: false, error: e.message }; }
 }

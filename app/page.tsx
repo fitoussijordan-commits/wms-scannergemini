@@ -29,32 +29,35 @@ function vibrateSuccess() { vibrate([30, 50, 30]); }
 function vibrateError() { vibrate([100, 30, 100]); }
 
 // ============================================
-// LABEL PRINTING — PrintNode ZPL → fallback popup
+// LABEL PRINTING — Modal + PrintNode/fallback
 // ============================================
-async function doPrintProduct(productName: string, barcode: string) {
-  const printerId = pn.getSavedPrinterId();
-  if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
-    return pn.printProductLabel(printerId, productName, barcode);
-  }
-  printLabelPopup(productName, barcode, barcode);
-  return { success: true };
+interface PrintRequest {
+  type: "product" | "lot" | "location";
+  title: string;
+  barcode: string;
+  ref?: string;
+  lotName?: string;
+  productName?: string;
+  expiryDate?: string;
+  locationName?: string;
 }
 
-async function doPrintLot(lotName: string, productName: string, lotBarcode: string) {
-  const printerId = pn.getSavedPrinterId();
-  if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
-    return pn.printLotLabel(printerId, lotName, productName, lotBarcode);
-  }
-  printLabelPopup(`${lotName} — ${productName}`, lotBarcode, lotBarcode);
-  return { success: true };
+// Global print state — set by components, read by modal
+let _setPrintReq: ((r: PrintRequest | null) => void) | null = null;
+
+function requestPrint(req: PrintRequest) {
+  if (_setPrintReq) _setPrintReq(req);
 }
 
-async function doPrintLocation(locationName: string, locationBarcode: string) {
+async function executePrint(req: PrintRequest, copies: number) {
   const printerId = pn.getSavedPrinterId();
   if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
-    return pn.printLocationLabel(printerId, locationName, locationBarcode);
+    if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
+    if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
+    if (req.type === "location") return pn.printLocationLabel(printerId, req.locationName || req.title, req.barcode, copies);
   }
-  printLabelPopup(locationName, locationBarcode, locationBarcode);
+  // Fallback popup (single copy)
+  printLabelPopup(req.title, req.barcode, req.barcode);
   return { success: true };
 }
 
@@ -62,10 +65,8 @@ function printLabelPopup(title: string, barcode: string, displayCode: string) {
   const sz = pn.getLabelSize();
   const w = window.open("", "_blank", "width=400,height=320,menubar=no,toolbar=no");
   if (!w) return;
-
   const isEAN = /^\d{8}$|^\d{13}$/.test(barcode);
   const bcFormat = isEAN ? (barcode.length === 8 ? "EAN8" : "EAN13") : "CODE128";
-
   w.document.write(`<!DOCTYPE html>
 <html><head>
 <style>
@@ -87,8 +88,8 @@ function printLabelPopup(title: string, barcode: string, displayCode: string) {
   </div>
   <button class="no-print" onclick="window.print()" style="margin-top:16px;padding:10px 24px;font-size:14px;font-weight:700;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;">Imprimer</button>
   <script>
-    try { JsBarcode("#bc", "${barcode}", { format: "${bcFormat}", width: 2, height: 50, displayValue: false, margin: 0 }); }
-    catch(e) { try { JsBarcode("#bc", "${barcode}", { format: "CODE128", width: 2, height: 50, displayValue: false, margin: 0 }); } catch(e2) {} }
+    try { JsBarcode("#bc", "${barcode}", { format: "${bcFormat}", width: 2, height: 60, displayValue: false, margin: 0 }); }
+    catch(e) { try { JsBarcode("#bc", "${barcode}", { format: "CODE128", width: 2, height: 60, displayValue: false, margin: 0 }); } catch(e2) {} }
     setTimeout(() => window.print(), 600);
   <\/script>
 </body></html>`);
@@ -196,6 +197,10 @@ export default function Page() {
   const [pickingMoves, setPickingMoves] = useState<any[]>([]);
   const [pickingMoveLines, setPickingMoveLines] = useState<any[]>([]);
   const [prepScanned, setPrepScanned] = useState<Set<number>>(new Set());
+
+  // Print modal
+  const [printReq, setPrintReq] = useState<PrintRequest | null>(null);
+  useEffect(() => { _setPrintReq = setPrintReq; return () => { _setPrintReq = null; }; }, []);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(""), 2200); };
 
@@ -902,6 +907,9 @@ function Shell({ children, toast }: { children: React.ReactNode; toast: string }
         input[type=number] { -moz-appearance: textfield; }
       `}</style>
       {toast && <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 999, background: C.text, color: "#fff", padding: "10px 20px", borderRadius: 10, fontSize: 13, fontWeight: 600, boxShadow: C.shadowLg, animation: "fadeIn .15s" }}>{toast}</div>}
+
+      {/* Print Modal */}
+      {printReq && <PrintModal req={printReq} onClose={() => setPrintReq(null)} onToast={showToast} />}
       {children}
     </div>
   );
@@ -1131,7 +1139,7 @@ function ProductResult({ product, stock }: { product: any; stock: any[] }) {
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product.default_code || ""} {product.barcode ? `· ${product.barcode}` : ""}</div>
         </div>
         {product.barcode && (
-          <button onClick={() => doPrintProduct(product.name, product.barcode)}
+          <button onClick={() => requestPrint({ type: "product", title: product.name, barcode: product.barcode, ref: product.default_code, productName: product.name })}
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
             title="Imprimer étiquette">
             {printerIcon}
@@ -1164,7 +1172,7 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product?.name}</div>
         </div>
         {lot.name && (
-          <button onClick={() => doPrintLot(lot.name, product?.name || "", lot.name)}
+          <button onClick={() => requestPrint({ type: "lot", title: `${lot.name} — ${product?.name || ""}`, barcode: lot.name, lotName: lot.name, productName: product?.name || "", expiryDate: lot.expiration_date || lot.use_date || lot.removal_date || "" })}
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
             title="Imprimer étiquette lot">
             {printerIcon}
@@ -1194,7 +1202,7 @@ function LocationResult({ location, stock }: { location: any; stock: any[] }) {
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
         </div>
         {location.barcode && (
-          <button onClick={() => doPrintLocation(location.name, location.barcode)}
+          <button onClick={() => requestPrint({ type: "location", title: location.name, barcode: location.barcode, locationName: location.name })}
             style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
             title="Imprimer étiquette emplacement">
             {printerIcon}
@@ -1214,6 +1222,114 @@ function LocationResult({ location, stock }: { location: any; stock: any[] }) {
 // ============================================
 // LOGIN
 // ============================================
+// ============================================
+// PRINT MODAL — choose quantity before printing
+// ============================================
+function PrintModal({ req, onClose, onToast }: { req: PrintRequest; onClose: () => void; onToast: (m: string) => void }) {
+  const [copies, setCopies] = useState(1);
+  const [sending, setSending] = useState(false);
+
+  const typeLabels: Record<string, string> = { product: "Produit", lot: "Lot", location: "Emplacement" };
+  const typeColors: Record<string, string> = { product: C.blue, lot: C.green, location: "#7c3aed" };
+
+  const doPrint = async () => {
+    setSending(true);
+    const result = await executePrint(req, copies);
+    setSending(false);
+    if (result.success) {
+      onToast(`✓ ${copies} étiquette(s) envoyée(s)`);
+      vibrateSuccess();
+    } else {
+      onToast("✕ Erreur impression");
+      vibrateError();
+    }
+    onClose();
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center", background: "rgba(0,0,0,0.4)", animation: "fadeIn .15s" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ width: "100%", maxWidth: 440, background: C.white, borderRadius: "20px 20px 0 0", padding: "24px 20px 32px", boxShadow: "0 -4px 30px rgba(0,0,0,0.15)", animation: "slideUp .2s" }}>
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {printerIcon}
+            <span style={{ fontSize: 16, fontWeight: 700, color: C.text }}>Imprimer</span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: typeColors[req.type] || C.blue, background: `${typeColors[req.type] || C.blue}15`, padding: "2px 8px", borderRadius: 6 }}>
+              {typeLabels[req.type] || req.type}
+            </span>
+          </div>
+          <button onClick={onClose} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 6 }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+
+        {/* Label preview info */}
+        <div style={{ background: C.bg, borderRadius: 12, padding: 14, marginBottom: 16 }}>
+          {req.type === "product" && <>
+            {req.ref && <div style={{ fontSize: 13, fontWeight: 700, color: C.blue, marginBottom: 2 }}>{req.ref}</div>}
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4 }}>{req.productName || req.title}</div>
+            <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{req.barcode}</div>
+          </>}
+          {req.type === "lot" && <>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2 }}>{req.lotName}</div>
+            <div style={{ fontSize: 12, color: C.textSec, marginBottom: 4 }}>{req.productName}</div>
+            {req.expiryDate && <div style={{ fontSize: 12, color: C.orange, fontWeight: 600 }}>
+              DLUO: {(() => { try { return new Date(req.expiryDate).toLocaleDateString("fr-FR"); } catch { return req.expiryDate; } })()}
+            </div>}
+            <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace", marginTop: 4 }}>{req.barcode}</div>
+          </>}
+          {req.type === "location" && <>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, marginBottom: 2 }}>{req.locationName || req.title}</div>
+            <div style={{ fontSize: 11, color: C.textMuted, fontFamily: "monospace" }}>{req.barcode}</div>
+          </>}
+        </div>
+
+        {/* Quantity */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Nombre d'étiquettes</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12 }}>
+            <button onClick={() => setCopies(c => Math.max(1, c - 1))} style={qtyBtnStyle}>−</button>
+            <input type="number" value={copies} min={1} max={99}
+              onChange={e => { const v = parseInt(e.target.value); if (v > 0 && v <= 99) setCopies(v); }}
+              onKeyDown={e => e.stopPropagation()}
+              style={{ width: 60, textAlign: "center", fontSize: 22, fontWeight: 800, fontFamily: "'DM Mono', monospace", border: `2px solid ${C.border}`, borderRadius: 10, padding: "8px 0", background: C.white, color: C.text }} />
+            <button onClick={() => setCopies(c => Math.min(99, c + 1))} style={qtyBtnStyle}>+</button>
+          </div>
+          {/* Presets */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>
+            {[1, 2, 5, 10, 25].map(n => (
+              <button key={n} onClick={() => setCopies(n)}
+                style={{ padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  background: copies === n ? C.blue : C.bg, color: copies === n ? "#fff" : C.textSec,
+                  border: `1px solid ${copies === n ? C.blue : C.border}`, transition: "all .1s",
+                }}>{n}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* Print button */}
+        <button onClick={doPrint} disabled={sending}
+          style={{ width: "100%", padding: 16, background: typeColors[req.type] || C.blue, color: "#fff", border: "none", borderRadius: 12, fontSize: 16, fontWeight: 700,
+            cursor: sending ? "wait" : "pointer", fontFamily: "inherit", opacity: sending ? 0.6 : 1, transition: "all .15s",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+          }}>
+          {printerIconWhite}
+          {sending ? "Envoi en cours..." : `Imprimer ${copies} étiquette${copies > 1 ? "s" : ""}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const qtyBtnStyle: React.CSSProperties = {
+  width: 44, height: 44, borderRadius: 12, border: `2px solid ${C.border}`, background: C.bg,
+  fontSize: 22, fontWeight: 700, color: C.text, cursor: "pointer", fontFamily: "inherit",
+  display: "flex", alignItems: "center", justifyContent: "center",
+};
+
+const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+
 // ============================================
 // SETTINGS SCREEN
 // ============================================
