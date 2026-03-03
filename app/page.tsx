@@ -111,6 +111,9 @@ function saveHistory(entry: HistoryEntry) {
 function loadHistory(): HistoryEntry[] {
   try { return JSON.parse(localStorage.getItem(HIST_KEY) || "[]"); } catch { return []; }
 }
+function clearHistory() {
+  try { localStorage.removeItem(HIST_KEY); } catch {}
+}
 
 // ============================================
 // SCANNER HOOK — Global Zebra key trapping
@@ -163,7 +166,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -517,26 +520,11 @@ export default function Page() {
             <BigButton icon={transferIcon("#fff")} label="Transfert interne" sub="Déplacer du stock entre emplacements" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
             <div style={{ height: 10 }} />
             <BigButton icon={prepIcon} label="Préparation" sub="Commandes à préparer et expédier" color="#7c3aed" onClick={() => { loadPickings(); setScreen("prep"); }} />
+            {history.length > 0 && <>
+              <div style={{ height: 10 }} />
+              <BigButton icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} label="Historique" sub={`${history.length} transfert${history.length > 1 ? "s" : ""} enregistré${history.length > 1 ? "s" : ""}`} color="#64748b" onClick={() => setScreen("history")} />
+            </>}
           </div>
-
-          {/* History */}
-          {history.length > 0 && (
-            <Section style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-                {clockIcon}
-                Derniers transferts
-              </div>
-              {history.slice(0, 5).map((h, i) => (
-                <div key={i} style={{ padding: "8px 0", borderBottom: i < Math.min(history.length, 5) - 1 ? `1px solid ${C.border}` : "none", fontSize: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontWeight: 600, color: C.text }}>{h.from} → {h.to}</span>
-                    <span style={{ color: C.textMuted, fontSize: 10 }}>{new Date(h.date).toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                  </div>
-                  <div style={{ color: C.textMuted, fontSize: 11, marginTop: 2 }}>{h.lineCount} ligne(s) · {h.products.slice(0, 2).join(", ")}{h.products.length > 2 ? "..." : ""}</div>
-                </div>
-              ))}
-            </Section>
-          )}
 
           {/* PrintNode printer config — moved to settings */}
         </>}
@@ -745,6 +733,11 @@ export default function Page() {
         {/* ===== SETTINGS ===== */}
         {screen === "settings" && (
           <SettingsScreen onBack={goHome} />
+        )}
+
+        {/* ===== HISTORY ===== */}
+        {screen === "history" && (
+          <HistoryScreen history={history} onClear={() => { clearHistory(); setHistory([]); goHome(); }} onBack={goHome} />
         )}
       </main>
 
@@ -1152,9 +1145,24 @@ function ProductResult({ product, stock }: { product: any; stock: any[] }) {
       </div>
       <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Par emplacement</div>
       {stock.map((q, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
-          <div><span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>{q.lot_id && <span style={{ color: C.blue, marginLeft: 6 }}>{q.lot_id[1]}</span>}</div>
-          <span style={{ fontWeight: 700, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)}</span>
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</div>
+            {q.lot_id && (
+              <button
+                onClick={() => requestPrint({
+                  type: "lot", title: `${q.lot_id[1]} — ${product.name}`,
+                  barcode: q.lot_id[1], lotName: q.lot_id[1], productName: product.name,
+                  expiryDate: q.expiration_date || "",
+                })}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 11, color: C.blue, fontWeight: 600, display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                {printerSmallIcon} {q.lot_id[1]}
+                {q.expiration_date && <span style={{ color: C.textMuted, fontWeight: 400 }}> · {(() => { try { return new Date(q.expiration_date).toLocaleDateString("fr-FR", { month: "2-digit", year: "numeric" }); } catch { return ""; } })()}</span>}
+              </button>
+            )}
+          </div>
+          <span style={{ fontWeight: 700, marginLeft: 8, color: (q.quantity - (q.reserved_quantity||0)) > 0 ? C.green : C.orange }}>{q.quantity - (q.reserved_quantity||0)}</span>
         </div>
       ))}
     </Section>
@@ -1329,6 +1337,73 @@ const qtyBtnStyle: React.CSSProperties = {
 };
 
 const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+
+// ============================================
+// HISTORY SCREEN
+// ============================================
+function HistoryScreen({ history, onClear, onBack }: { history: HistoryEntry[]; onClear: () => void; onBack: () => void }) {
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  // Group by day
+  const grouped: Record<string, HistoryEntry[]> = {};
+  for (const h of history) {
+    const day = new Date(h.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+    if (!grouped[day]) grouped[day] = [];
+    grouped[day].push(h);
+  }
+
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Historique</h2>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{history.length}</span>
+        </div>
+        {history.length > 0 && (
+          <button onClick={() => confirmClear ? onClear() : setConfirmClear(true)}
+            style={{ fontSize: 11, fontWeight: 600, color: confirmClear ? C.red : C.textMuted, background: confirmClear ? `${C.red}12` : "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: "6px 10px", borderRadius: 6 }}>
+            {confirmClear ? "Confirmer la suppression ?" : "Vider"}
+          </button>
+        )}
+      </div>
+
+      {history.length === 0 ? (
+        <Section>
+          <div style={{ textAlign: "center", padding: 32, color: C.textMuted, fontSize: 13 }}>Aucun transfert enregistré</div>
+        </Section>
+      ) : (
+        Object.entries(grouped).map(([day, entries]) => (
+          <div key={day} style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "capitalize", marginBottom: 8, padding: "0 4px" }}>{day}</div>
+            <Section>
+              {entries.map((h, i) => (
+                <div key={i} style={{ padding: "10px 0", borderBottom: i < entries.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ width: 32, height: 32, borderRadius: 8, background: C.blueSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{h.from} → {h.to}</div>
+                        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>{h.lineCount} ligne{h.lineCount > 1 ? "s" : ""} · {h.products.slice(0, 2).join(", ")}{h.products.length > 2 ? ` +${h.products.length - 2}` : ""}</div>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 10, color: C.textMuted, whiteSpace: "nowrap" }}>
+                      {new Date(h.date).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </Section>
+          </div>
+        ))
+      )}
+    </>
+  );
+}
 
 // ============================================
 // SETTINGS SCREEN
@@ -1762,6 +1837,7 @@ const trashIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" st
 const editIcon = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
 const clockIcon = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
 const printerIcon = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textSec} strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+const printerSmallIcon = <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2.5"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
 const settingsIcon = <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
 
 const testBtnStyle: React.CSSProperties = {

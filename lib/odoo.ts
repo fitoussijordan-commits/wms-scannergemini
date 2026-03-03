@@ -69,7 +69,7 @@ export async function smartScan(session: OdooSession, code: string): Promise<Sca
   if (byRef.length) return { type: "product", data: byRef[0] };
 
   // 4. Lot
-  const lots = await searchRead(session, "stock.lot", [["name", "=", code]], ["id", "name", "product_id"], 1);
+  const lots = await searchRead(session, "stock.lot", [["name", "=", code]], ["id", "name", "product_id", "expiration_date", "use_date", "removal_date"], 1);
   if (lots.length) {
     let prod = await searchRead(session, "product.product", [["id", "=", lots[0].product_id[0]]], PRODUCT_FIELDS, 1);
     // Fallback: archived product
@@ -94,12 +94,28 @@ export async function smartScan(session: OdooSession, code: string): Promise<Sca
 
 // All stock for a product across all internal locations
 export async function getAllStockForProduct(session: OdooSession, productId: number) {
-  return searchRead(
+  const quants = await searchRead(
     session, "stock.quant",
     [["product_id", "=", productId], ["quantity", "!=", 0], ["location_id.usage", "=", "internal"]],
     ["location_id", "lot_id", "quantity", "reserved_quantity"],
     500, "location_id"
   );
+
+  // Enrich with lot expiration dates
+  const lotIds = [...new Set(quants.filter((q: any) => q.lot_id).map((q: any) => q.lot_id[0]))];
+  if (lotIds.length > 0) {
+    const lots = await searchRead(session, "stock.lot", [["id", "in", lotIds]], ["id", "expiration_date", "use_date", "removal_date"], lotIds.length);
+    const lotMap: Record<number, any> = {};
+    for (const l of lots) lotMap[l.id] = l;
+    for (const q of quants) {
+      if (q.lot_id) {
+        const lot = lotMap[q.lot_id[0]];
+        if (lot) q.expiration_date = lot.expiration_date || lot.use_date || lot.removal_date || "";
+      }
+    }
+  }
+
+  return quants;
 }
 
 // Stock for a specific lot across internal locations

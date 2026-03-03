@@ -32,7 +32,7 @@ export function saveLabelSize(size: LabelSize) {
   try { localStorage.setItem(LABEL_SIZE_KEY, JSON.stringify(size)); } catch {}
 }
 
-function mmToDots(mm: number): number { return Math.round(mm * 8); }
+function mm(v: number): number { return Math.round(v * 8); } // mm → dots @203dpi
 
 // ============================================
 // PRINTER
@@ -56,24 +56,18 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // PRINT JOB
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
-  // Repeat ZPL for quantity
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
-
   const res = await fetch(`${API_URL}/printjobs`, {
     method: "POST",
     headers: headers(),
     body: JSON.stringify({
-      printerId,
-      title,
+      printerId, title,
       contentType: "raw_base64",
       content: btoa(fullZpl),
       source: "WMS Scanner",
     }),
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`PrintNode erreur: ${err}`);
-  }
+  if (!res.ok) throw new Error(`PrintNode erreur: ${await res.text()}`);
   return await res.json();
 }
 
@@ -81,120 +75,148 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
 // ZPL HELPERS
 // ============================================
 function trunc(s: string, max: number): string {
-  return s.length > max ? s.substring(0, max - 1) : s;
+  return s.length > max ? s.substring(0, max) : s;
 }
 
-function barcodeZPL(barcode: string, x: number, y: number, height: number, barWidth: number = 3): string {
+function formatDate(d: string): string {
+  try { const dt = new Date(d); return isNaN(dt.getTime()) ? d : dt.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" }); }
+  catch { return d; }
+}
+
+// Barcode centered horizontally on label
+// ^FT uses baseline positioning; we use ^FO with calculated X
+function barcodeZPL(barcode: string, labelW: number, y: number, height: number, barW: number = 3): string {
   const isEAN13 = /^\d{13}$/.test(barcode);
   const isEAN8 = /^\d{8}$/.test(barcode);
-  if (isEAN13) return `^BY${barWidth},3,${height}^FO${x},${y}^BEN,${height},Y,N^FD${barcode}^FS`;
-  if (isEAN8) return `^BY${barWidth},3,${height}^FO${x},${y}^B8N,${height},Y,N^FD${barcode}^FS`;
-  // Code 128
-  return `^BY${barWidth},3,${height}^FO${x},${y}^BCN,${height},Y,N,N^FD${barcode}^FS`;
+
+  // Estimate barcode pixel width to center it
+  // EAN-13: ~95 modules * barW, EAN-8: ~67 modules * barW, Code128: ~(11*chars + 35) * barW
+  let bcPixelW: number;
+  if (isEAN13) bcPixelW = 95 * barW;
+  else if (isEAN8) bcPixelW = 67 * barW;
+  else bcPixelW = (11 * barcode.length + 35) * barW;
+
+  const x = Math.max(5, Math.round((labelW - bcPixelW) / 2));
+
+  if (isEAN13) return `^BY${barW},3,${height}^FO${x},${y}^BEN,${height},Y,N^FD${barcode}^FS`;
+  if (isEAN8) return `^BY${barW},3,${height}^FO${x},${y}^B8N,${height},Y,N^FD${barcode}^FS`;
+  return `^BY${barW},3,${height}^FO${x},${y}^BCN,${height},Y,N,N^FD${barcode}^FS`;
 }
 
 // ============================================
-// PRODUCT LABEL: ref + name + BIG barcode + EAN
+// PRODUCT LABEL
+// Layout: [ref] → name → ===barcode=== → EAN text
 // ============================================
 export function generateProductZPL(productName: string, barcode: string, ref?: string): string {
   const sz = getLabelSize();
-  const W = mmToDots(sz.widthMM);
-  const H = mmToDots(sz.heightMM);
-  const cW = W - 30;
+  const W = mm(sz.widthMM);
+  const H = mm(sz.heightMM);
+  const cW = W - 20;
   const cpl = Math.floor(cW / 13);
-
-  // Layout: content centered vertically
-  // ref (small) → name → barcode (big) → ean text
-  const refText = ref || "";
-  const name = trunc(productName, cpl);
-  const bcH = Math.min(Math.round(H * 0.38), 120); // 38% of label height
   const barW = sz.widthMM >= 60 ? 3 : 2;
+  const bcH = Math.min(Math.round(H * 0.40), 130);
+  const hasRef = !!ref;
 
-  // Y positions — push content down to center
-  const totalContent = 24 + 28 + 8 + bcH + 20; // ref + name + gap + barcode + ean text
-  const startY = Math.max(10, Math.round((H - totalContent) / 2));
+  // Block heights: ref(22) + gap(4) + name(26) + gap(8) + barcode(bcH) + ean(~20)
+  const refBlock = hasRef ? 26 : 0;
+  const nameBlock = 30;
+  const bcBlock = bcH + 24; // barcode + ean text below
+  const total = refBlock + nameBlock + bcBlock;
+  const startY = Math.max(8, Math.round((H - total) / 2));
 
-  return [
-    "^XA", `^PW${W}`, `^LL${H}`,
-    // Ref (small, centered)
-    refText ? `^FO15,${startY}^A0N,22,22^FB${cW},1,0,C^FD${trunc(refText, cpl)}^FS` : "",
-    // Product name (bold, centered)
-    `^FO15,${startY + (refText ? 28 : 0)}^A0N,26,26^FB${cW},1,0,C^FD${name}^FS`,
-    // Barcode (BIG)
-    barcodeZPL(barcode, 20, startY + (refText ? 28 : 0) + 34, bcH, barW),
-    "^XZ",
-  ].filter(Boolean).join("\n");
+  let y = startY;
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"]; // CI28 = UTF-8
+
+  if (hasRef) {
+    lines.push(`^FO10,${y}^A0N,20,20^FB${cW},1,0,C^FD${trunc(ref!, cpl)}^FS`);
+    y += 26;
+  }
+  lines.push(`^FO10,${y}^A0N,26,26^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`);
+  y += nameBlock;
+  lines.push(barcodeZPL(barcode, W, y, bcH, barW));
+  lines.push("^XZ");
+
+  return lines.join("\n");
 }
 
 // ============================================
-// LOT LABEL: lot name (big) + name + expiry + barcode
+// LOT LABEL
+// Layout: lot name (big) → product name → DLUO → ===barcode===
 // ============================================
 export function generateLotZPL(lotName: string, productName: string, lotBarcode: string, expiryDate?: string): string {
   const sz = getLabelSize();
-  const W = mmToDots(sz.widthMM);
-  const H = mmToDots(sz.heightMM);
-  const cW = W - 30;
+  const W = mm(sz.widthMM);
+  const H = mm(sz.heightMM);
+  const cW = W - 20;
   const cpl = Math.floor(cW / 13);
-  const bcH = Math.min(Math.round(H * 0.32), 100);
   const barW = sz.widthMM >= 60 ? 3 : 2;
-
-  // Format expiry
+  const bcH = Math.min(Math.round(H * 0.33), 110);
   const expStr = expiryDate ? formatDate(expiryDate) : "";
 
-  const totalContent = 32 + 24 + (expStr ? 22 : 0) + 8 + bcH + 18;
-  const startY = Math.max(8, Math.round((H - totalContent) / 2));
+  const lotBlock = 36;
+  const nameBlock = 26;
+  const expBlock = expStr ? 24 : 0;
+  const bcBlock = bcH + 22;
+  const total = lotBlock + nameBlock + expBlock + bcBlock;
+  const startY = Math.max(6, Math.round((H - total) / 2));
 
-  return [
-    "^XA", `^PW${W}`, `^LL${H}`,
-    // Lot name (large bold)
-    `^FO15,${startY}^A0N,32,32^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`,
-    // Product name
-    `^FO15,${startY + 36}^A0N,22,22^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`,
-    // Expiry date
-    expStr ? `^FO15,${startY + 62}^A0N,22,22^FB${cW},1,0,C^FDDLUO: ${expStr}^FS` : "",
-    // Barcode
-    barcodeZPL(lotBarcode, 20, startY + 62 + (expStr ? 28 : 8), bcH, barW),
-    "^XZ",
-  ].filter(Boolean).join("\n");
+  let y = startY;
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+
+  // Lot name — large bold
+  lines.push(`^FO10,${y}^A0N,30,30^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`);
+  y += lotBlock;
+
+  // Product name
+  lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`);
+  y += nameBlock;
+
+  // Expiry date
+  if (expStr) {
+    lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,C^FDDLUO: ${expStr}^FS`);
+    y += expBlock;
+  }
+
+  // Barcode
+  lines.push(barcodeZPL(lotBarcode, W, y, bcH, barW));
+  lines.push("^XZ");
+
+  return lines.join("\n");
 }
 
 // ============================================
-// LOCATION LABEL: name (large) + barcode
+// LOCATION LABEL
+// Layout: name (large) → ===barcode===
 // ============================================
 export function generateLocationZPL(locationName: string, locationBarcode: string): string {
   const sz = getLabelSize();
-  const W = mmToDots(sz.widthMM);
-  const H = mmToDots(sz.heightMM);
-  const cW = W - 30;
-  const bcH = Math.min(Math.round(H * 0.4), 120);
+  const W = mm(sz.widthMM);
+  const H = mm(sz.heightMM);
+  const cW = W - 20;
   const barW = sz.widthMM >= 60 ? 3 : 2;
+  const bcH = Math.min(Math.round(H * 0.42), 130);
 
-  const totalContent = 40 + 16 + bcH;
-  const startY = Math.max(10, Math.round((H - totalContent) / 2));
+  const nameBlock = 48;
+  const bcBlock = bcH + 22;
+  const total = nameBlock + bcBlock;
+  const startY = Math.max(8, Math.round((H - total) / 2));
 
-  return [
-    "^XA", `^PW${W}`, `^LL${H}`,
-    // Location name (large)
-    `^FO15,${startY}^A0N,40,40^FB${cW},1,0,C^FD${locationName}^FS`,
-    // Barcode
-    locationBarcode ? barcodeZPL(locationBarcode, 20, startY + 52, bcH, barW) : "",
-    "^XZ",
-  ].filter(Boolean).join("\n");
+  let y = startY;
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+
+  lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${locationName}^FS`);
+  y += nameBlock;
+
+  if (locationBarcode) {
+    lines.push(barcodeZPL(locationBarcode, W, y, bcH, barW));
+  }
+  lines.push("^XZ");
+
+  return lines.join("\n");
 }
 
 // ============================================
-// DATE HELPER
-// ============================================
-function formatDate(d: string): string {
-  try {
-    const dt = new Date(d);
-    if (isNaN(dt.getTime())) return d;
-    return dt.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
-  } catch { return d; }
-}
-
-// ============================================
-// PRINT FUNCTIONS (with quantity)
+// PRINT FUNCTIONS
 // ============================================
 export async function printProductLabel(
   printerId: number, productName: string, barcode: string, ref?: string, qty: number = 1
