@@ -85,12 +85,22 @@ function formatDate(d: string): string {
 
 // Barcode centered horizontally on label
 // ^FT uses baseline positioning; we use ^FO with calculated X
-function barcodeZPL(barcode: string, labelW: number, y: number, height: number, barW: number = 3): string {
+function barcodeZPL(barcode: string, labelW: number, y: number, height: number, preferredBarW: number = 3): string {
   const isEAN13 = /^\d{13}$/.test(barcode);
   const isEAN8 = /^\d{8}$/.test(barcode);
 
+  let barW = preferredBarW;
+
+  // For Code128 (lots, locations, etc.): auto-scale barWidth to fit label
+  if (!isEAN13 && !isEAN8) {
+    // Code128 module count ≈ 11 * chars + 35 (start + checksum + stop)
+    const modules = 11 * barcode.length + 35;
+    const maxW = labelW - 40; // leave 20px margin each side
+    // Find largest barW that fits
+    barW = Math.min(preferredBarW, Math.max(1, Math.floor(maxW / modules)));
+  }
+
   // Estimate barcode pixel width to center it
-  // EAN-13: ~95 modules * barW, EAN-8: ~67 modules * barW, Code128: ~(11*chars + 35) * barW
   let bcPixelW: number;
   if (isEAN13) bcPixelW = 95 * barW;
   else if (isEAN8) bcPixelW = 67 * barW;
