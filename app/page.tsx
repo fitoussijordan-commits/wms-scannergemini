@@ -514,7 +514,7 @@ export default function Page() {
           {error && <Alert type="error">{error}</Alert>}
           {lookupType === "product" && lookupResult && <ProductResult product={lookupResult} stock={lookupStock} />}
           {lookupType === "lot" && lookupResult && <LotResult lot={lookupResult.lot} product={lookupResult.product} stock={lookupStock} />}
-          {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} />}
+          {lookupType === "location" && lookupResult && <LocationResult location={lookupResult} stock={lookupStock} onRename={rename} />}
 
           <div style={{ marginTop: 16 }}>
             <BigButton icon={transferIcon("#fff")} label="Transfert interne" sub="Déplacer du stock entre emplacements" onClick={() => { resetTransfer(); setScreen("transfer"); }} />
@@ -849,8 +849,9 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
         <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Quantité</div>
         <div style={{ display: "flex", alignItems: "center", gap: 0, borderRadius: 10, overflow: "hidden", border: `1.5px solid ${C.border}` }}>
           <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }} style={qtyBtn}>−</button>
-          <input type="number" min="1" value={qty}
-            onChange={e => { const v = parseInt(e.target.value); if (v > 0) setQty(v); }}
+          <input type="number" min="1" value={qty === 0 ? "" : qty}
+            onChange={e => { const raw = e.target.value; if (raw === "") { setQty(0); return; } const v = parseInt(raw); if (!isNaN(v) && v >= 0) setQty(v); }}
+            onBlur={() => { if (qty === 0) setQty(1); }}
             onKeyDown={e => e.stopPropagation()}
             style={{ flex: 1, textAlign: "center", fontSize: 22, fontWeight: 800, border: "none", outline: "none", background: C.white, color: C.text, padding: "12px 0", fontFamily: "'DM Mono', monospace" }} />
           <button onClick={() => { setQty(qty + 1); vibrate(); }} style={qtyBtn}>+</button>
@@ -1201,12 +1202,28 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
   );
 }
 
-function LocationResult({ location, stock }: { location: any; stock: any[] }) {
+function LocationResult({ location, stock, onRename }: { location: any; stock: any[]; onRename?: (id: number, name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [locName, setLocName] = useState(location.name);
+  useEffect(() => setLocName(location.name), [location.name]);
+
   return (
     <Section>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2 }}>{location.name}</div>
+          {editing ? (
+            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+              <input style={{ ...inputStyle, fontSize: 15, padding: "4px 8px", fontWeight: 700 }} value={locName}
+                onChange={e => setLocName(e.target.value)}
+                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter" && onRename) { onRename(location.id, locName); setEditing(false); } if (e.key === "Escape") { setLocName(location.name); setEditing(false); } }}
+                autoFocus />
+            </div>
+          ) : (
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 2, display: "flex", alignItems: "center", gap: 6 }}>
+              {location.name}
+              {onRename && <button onClick={() => setEditing(true)} style={{ ...iconBtn, width: 22, height: 22 }}>{editIcon}</button>}
+            </div>
+          )}
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
         </div>
         {location.barcode && (
