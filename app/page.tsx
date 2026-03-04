@@ -1336,7 +1336,18 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
       {stock.map((q, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontWeight: 600 }}>{q.product_id[1]}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ fontWeight: 600 }}>{q.product_id[1]}</span>
+              {q.product_barcode && (
+                <button onClick={() => requestPrint({
+                  type: "product", title: q.product_id[1], barcode: q.product_barcode, ref: q.product_ref, productName: q.product_id[1],
+                })}
+                style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "inline-flex", alignItems: "center" }}
+                title="Imprimer étiquette produit">
+                  {printerSmallIcon}
+                </button>
+              )}
+            </div>
             {q.lot_id && (
               <button onClick={() => requestPrint({
                 type: "lot", title: `${q.lot_name || q.lot_id[1]} — ${q.product_id[1]}`,
@@ -1344,7 +1355,7 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
                 expiryDate: q.expiration_date || "",
               })}
               style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",
-                fontSize: 11, color: C.blue, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, marginLeft: 6 }}>
+                fontSize: 11, color: C.blue, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 3, marginTop: 2 }}>
                 {printerSmallIcon} {q.lot_name || q.lot_id[1]}
                 {q.expiration_date && <span style={{ color: C.textMuted, fontWeight: 400 }}> · {(() => { try { return new Date(q.expiration_date).toLocaleDateString("fr-FR", { month: "2-digit", year: "numeric" }); } catch { return ""; } })()}</span>}
               </button>

@@ -182,6 +182,20 @@ export async function getProductsAtLocation(session: OdooSession, locationId: nu
       }
     }
   }
+  // Enrich with product barcode and default_code
+  const productIds = Array.from(new Set(quants.map((q: any) => q.product_id[0])));
+  if (productIds.length > 0) {
+    const products = await searchRead(session, "product.product", [["id", "in", productIds]], ["id", "barcode", "default_code"], productIds.length);
+    const prodMap: Record<number, any> = {};
+    for (const p of products) prodMap[p.id] = p;
+    for (const q of quants) {
+      const prod = prodMap[q.product_id[0]];
+      if (prod) {
+        q.product_barcode = prod.barcode || "";
+        q.product_ref = prod.default_code || "";
+      }
+    }
+  }
   return quants;
 }
 
@@ -202,7 +216,7 @@ export async function renameLocation(session: OdooSession, locationId: number, n
 
 const PICKING_FIELDS = [
   "id", "name", "state", "scheduled_date", "date_deadline", "date",
-  "partner_id", "origin", "picking_type_id",
+  "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
 ];
 
@@ -232,22 +246,46 @@ export async function getOutgoingPickings(session: OdooSession) {
     "date_deadline asc, scheduled_date asc, id asc"
   );
 
-  // Enrich with sale order shipping date (date d'expédition prévue)
-  const origins = Array.from(new Set(pickings.map((p: any) => p.origin).filter(Boolean)));
-  if (origins.length > 0) {
-    const sales = await searchRead(
-      session, "sale.order",
-      [["name", "in", origins]],
-      ["id", "name", "commitment_date", "expected_date", "date_order"],
-      origins.length
-    );
-    const salesMap: Record<string, any> = {};
-    for (const s of sales) salesMap[s.name] = s;
-    for (const p of pickings) {
-      const sale = p.origin ? salesMap[p.origin] : null;
-      if (sale) {
-        // commitment_date = "Date d'expédition prévue" in Odoo
-        p.shipping_date = sale.commitment_date || sale.expected_date || sale.date_order || null;
+  // Enrich with shipping date from related OUT picking (via group_id) or sale order
+  const groupIds = Array.from(new Set(pickings.map((p: any) => p.group_id?.[0]).filter(Boolean)));
+  if (groupIds.length > 0) {
+    // Find outgoing pickings with same group_id
+    const outTypes = await searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 10);
+    const outTypeIds = outTypes.map((t: any) => t.id);
+    if (outTypeIds.length > 0) {
+      const outPickings = await searchRead(
+        session, "stock.picking",
+        [["group_id", "in", groupIds], ["picking_type_id", "in", outTypeIds]],
+        ["id", "group_id", "scheduled_date", "date_deadline", "origin"],
+        500
+      );
+      // Map group_id → OUT picking
+      const outByGroup: Record<number, any> = {};
+      for (const op of outPickings) {
+        if (op.group_id) outByGroup[op.group_id[0]] = op;
+      }
+      // Also try to get sale order dates from OUT picking origins
+      const soNames = Array.from(new Set(outPickings.map((op: any) => op.origin).filter(Boolean)));
+      const salesMap: Record<string, any> = {};
+      if (soNames.length > 0) {
+        const sales = await searchRead(
+          session, "sale.order",
+          [["name", "in", soNames]],
+          ["id", "name", "commitment_date", "expected_date"],
+          soNames.length
+        );
+        for (const s of sales) salesMap[s.name] = s;
+      }
+
+      for (const p of pickings) {
+        const gid = p.group_id?.[0];
+        if (gid && outByGroup[gid]) {
+          const outP = outByGroup[gid];
+          const sale = outP.origin ? salesMap[outP.origin] : null;
+          // Priority: sale.commitment_date > OUT.date_deadline > OUT.scheduled_date
+          p.shipping_date = sale?.commitment_date || sale?.expected_date || outP.date_deadline || outP.scheduled_date || null;
+          if (!p.origin && outP.origin) p.origin = outP.origin; // show SO ref
+        }
       }
     }
   }
