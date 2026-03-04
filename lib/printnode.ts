@@ -1,19 +1,6 @@
-// lib/printnode.ts
-
-const API_URL = "https://api.printnode.com";
-
-function getApiKey(): string {
-  const key = process.env.NEXT_PUBLIC_PRINTNODE_API_KEY || "";
-  if (!key) throw new Error("NEXT_PUBLIC_PRINTNODE_API_KEY non configurée");
-  return key;
-}
-
-function headers() {
-  return {
-    "Authorization": "Basic " + btoa(getApiKey() + ":"),
-    "Content-Type": "application/json",
-  };
-}
+// lib/printnode.ts — Client-side PrintNode helper
+// All API calls go through /api/printnode (server-side proxy)
+// API key is NEVER exposed to the browser
 
 // ============================================
 // LABEL SIZE CONFIG
@@ -43,8 +30,11 @@ export interface PrintNodePrinter {
 }
 
 export async function listPrinters(): Promise<PrintNodePrinter[]> {
-  const res = await fetch(`${API_URL}/printers`, { headers: headers() });
-  if (!res.ok) throw new Error(`PrintNode erreur ${res.status}`);
+  const res = await fetch("/api/printnode?action=printers");
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Erreur ${res.status}`);
+  }
   const data = await res.json();
   return data.map((p: any) => ({
     id: p.id, name: p.name, description: p.description || "", state: p.state,
@@ -53,22 +43,27 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 }
 
 // ============================================
-// PRINT JOB
+// PRINT JOB (via server proxy)
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
-  const res = await fetch(`${API_URL}/printjobs`, {
+  const res = await fetch("/api/printnode", {
     method: "POST",
-    headers: headers(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      printerId, title,
-      contentType: "raw_base64",
+      action: "print",
+      printerId,
+      title,
       content: btoa(fullZpl),
       source: "WMS Scanner",
     }),
   });
-  if (!res.ok) throw new Error(`PrintNode erreur: ${await res.text()}`);
-  return await res.json();
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Erreur impression ${res.status}`);
+  }
+  const data = await res.json();
+  return data.jobId;
 }
 
 // ============================================
@@ -83,24 +78,18 @@ function formatDate(d: string): string {
   catch { return d; }
 }
 
-// Barcode centered horizontally on label
-// ^FT uses baseline positioning; we use ^FO with calculated X
 function barcodeZPL(barcode: string, labelW: number, y: number, height: number, preferredBarW: number = 3): string {
   const isEAN13 = /^\d{13}$/.test(barcode);
   const isEAN8 = /^\d{8}$/.test(barcode);
 
   let barW = preferredBarW;
 
-  // For Code128 (lots, locations, etc.): auto-scale barWidth to fit label
   if (!isEAN13 && !isEAN8) {
-    // Code128 module count ≈ 11 * chars + 35 (start + checksum + stop)
     const modules = 11 * barcode.length + 35;
-    const maxW = labelW - 40; // leave 20px margin each side
-    // Find largest barW that fits
+    const maxW = labelW - 40;
     barW = Math.min(preferredBarW, Math.max(1, Math.floor(maxW / modules)));
   }
 
-  // Estimate barcode pixel width to center it
   let bcPixelW: number;
   if (isEAN13) bcPixelW = 95 * barW;
   else if (isEAN8) bcPixelW = 67 * barW;
@@ -115,7 +104,6 @@ function barcodeZPL(barcode: string, labelW: number, y: number, height: number, 
 
 // ============================================
 // PRODUCT LABEL
-// Layout: [ref] → name → ===barcode=== → EAN text
 // ============================================
 export function generateProductZPL(productName: string, barcode: string, ref?: string): string {
   const sz = getLabelSize();
@@ -127,15 +115,14 @@ export function generateProductZPL(productName: string, barcode: string, ref?: s
   const bcH = Math.min(Math.round(H * 0.40), 130);
   const hasRef = !!ref;
 
-  // Block heights: ref(22) + gap(4) + name(26) + gap(8) + barcode(bcH) + ean(~20)
   const refBlock = hasRef ? 26 : 0;
   const nameBlock = 30;
-  const bcBlock = bcH + 24; // barcode + ean text below
+  const bcBlock = bcH + 24;
   const total = refBlock + nameBlock + bcBlock;
   const startY = Math.max(8, Math.round((H - total) / 2));
 
   let y = startY;
-  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"]; // CI28 = UTF-8
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
   if (hasRef) {
     lines.push(`^FO10,${y}^A0N,20,20^FB${cW},1,0,C^FD${trunc(ref!, cpl)}^FS`);
@@ -151,7 +138,6 @@ export function generateProductZPL(productName: string, barcode: string, ref?: s
 
 // ============================================
 // LOT LABEL
-// Layout: lot name (big) → product name → DLUO → ===barcode===
 // ============================================
 export function generateLotZPL(lotName: string, productName: string, lotBarcode: string, expiryDate?: string): string {
   const sz = getLabelSize();
@@ -173,21 +159,16 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
   let y = startY;
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
-  // Lot name — large bold
   lines.push(`^FO10,${y}^A0N,30,30^FB${cW},1,0,C^FD${trunc(lotName, cpl)}^FS`);
   y += lotBlock;
-
-  // Product name
   lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,C^FD${trunc(productName, cpl)}^FS`);
   y += nameBlock;
 
-  // Expiry date
   if (expStr) {
     lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,C^FDDLUO: ${expStr}^FS`);
     y += expBlock;
   }
 
-  // Barcode
   lines.push(barcodeZPL(lotBarcode, W, y, bcH, barW));
   lines.push("^XZ");
 
@@ -196,7 +177,6 @@ export function generateLotZPL(lotName: string, productName: string, lotBarcode:
 
 // ============================================
 // LOCATION LABEL
-// Layout: name (large) → ===barcode===
 // ============================================
 export function generateLocationZPL(locationName: string, locationBarcode: string): string {
   const sz = getLabelSize();
@@ -258,7 +238,6 @@ export async function printLocationLabel(
   } catch (e: any) { return { success: false, error: e.message }; }
 }
 
-// Legacy
 export async function printLabel(
   printerId: number, productName: string, barcode: string
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
@@ -279,5 +258,5 @@ export function savePrinterId(id: number) {
 }
 
 export function isConfigured(): boolean {
-  return !!process.env.NEXT_PUBLIC_PRINTNODE_API_KEY && !!getSavedPrinterId();
+  return !!getSavedPrinterId();
 }
