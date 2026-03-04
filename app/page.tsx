@@ -52,7 +52,7 @@ function requestPrint(req: PrintRequest) {
 
 async function executePrint(req: PrintRequest, copies: number) {
   const printerId = pn.getSavedPrinterId();
-  if (printerId && process.env.NEXT_PUBLIC_PRINTNODE_API_KEY) {
+  if (printerId) {
     if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
     if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
     if (req.type === "location") return pn.printLocationLabel(printerId, req.locationName || req.title, req.barcode, copies);
@@ -1548,15 +1548,21 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
   // Label size
   const [labelSize, setLabelSize] = useState<pn.LabelSize>(() => pn.getLabelSize());
 
-  const hasKey = !!process.env.NEXT_PUBLIC_PRINTNODE_API_KEY;
+  const [hasKey, setHasKey] = useState(true); // assume configured, check on load
 
   const fetchPrinters = async () => {
     setLoadingP(true); setMsg("");
     try {
       const list = await pn.listPrinters();
       setPrinters(list);
+      setHasKey(true);
       if (!list.length) setMsg("Aucune imprimante trouvée");
-    } catch (e: any) { setMsg("Erreur: " + e.message); }
+    } catch (e: any) {
+      if (e.message?.includes("non configurée") || e.message?.includes("500")) {
+        setHasKey(false);
+      }
+      setMsg("Erreur: " + e.message);
+    }
     setLoadingP(false);
   };
 
@@ -1693,7 +1699,7 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
       ) : (
         <Section>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🖨 Imprimante</div>
-          <Alert type="info">Ajoute NEXT_PUBLIC_PRINTNODE_API_KEY dans les variables Vercel pour activer PrintNode.</Alert>
+          <Alert type="info">Ajoute PRINTNODE_API_KEY dans les variables d'environnement Vercel pour activer PrintNode.</Alert>
         </Section>
       )}
 
