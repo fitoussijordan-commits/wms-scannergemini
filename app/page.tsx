@@ -1790,9 +1790,6 @@ function PrepListScreen({ pickings, loading, error, onOpen, onCheckAvail, onRefr
                           <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.name}</div>
                           {p.partner_id && <div style={{ fontSize: 12, color: C.textSec }}>{p.partner_id[1]}</div>}
                           {p.origin && <div style={{ fontSize: 11, color: C.textMuted }}>Origine: {p.origin}</div>}
-                          <div style={{ fontSize: 9, color: C.orange, fontFamily: "monospace", marginTop: 2 }}>
-                            ship={p.shipping_date || "∅"} · dl={p.date_deadline || "∅"} · sched={p.scheduled_date?.substring(0,10) || "∅"} · grp={p.group_id?.[1] || "∅"}
-                          </div>
                         </div>
                         <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Prêt</span>
                       </div>
