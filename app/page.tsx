@@ -1513,7 +1513,7 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       // 2. Match supplier refs with Odoo
       const allRefs = Array.from(new Set(
         data.pallets.flatMap((p: any) => p.cartons.map((c: any) => c.supplierRef)).filter(Boolean)
-      ));
+      )) as string[];
       if (allRefs.length > 0 && session) {
         const matches = await odoo.matchSupplierRefs(session, allRefs);
         setMatchData(matches);
