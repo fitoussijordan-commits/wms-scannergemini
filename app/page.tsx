@@ -2469,8 +2469,13 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
     setSearching(true);
     try {
       const result = await odoo.smartScan(session, query.trim());
-      if (result.type === "product" || result.type === "lot") {
-        setSearchResults([result]);
+      if (result.type === "product") {
+        // data is product.product record
+        setSearchResults([{ productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
+      } else if (result.type === "lot") {
+        // data is { lot, product }
+        const prod = result.data.product;
+        setSearchResults([{ productName: prod?.name || result.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || result.data.lot.product_id[0], lotName: result.data.lot.name }]);
       } else {
         setSearchResults([]);
         onToast("Aucun produit trouvé");
@@ -2486,7 +2491,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
     setAdjustments({});
     setLoadingQuants(true);
     try {
-      const productId = result.product_id || result.id;
+      const productId = result.id;
       const data = await odoo.getQuantsForProduct(session, productId);
       setQuants(data);
       // Pre-fill adjustments with current quantities
