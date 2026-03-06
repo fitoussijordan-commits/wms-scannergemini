@@ -1117,9 +1117,9 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       if (!r) {
         const res = await import("@/lib/odoo").then(m => m.smartScan(session, query));
         if (res?.type === "product") {
-          setSearchResults([{ id: res.data.id, name: res.data.name, ref: res.data.default_code || "", barcode: res.data.barcode || "" }]);
+          setSearchResults([{ id: res.data.id, name: res.data.name, ref: res.data.default_code || "", barcode: res.data.barcode || "", weight: res.data.weight || null }]);
         } else if (res?.type === "lot") {
-          setSearchResults([{ id: res.data.product?.id, name: res.data.product?.name || "", ref: res.data.product?.default_code || "", lotNumber: res.data.lot?.name || "", expiryDate: res.data.lot?.expiration_date || "" }]);
+          setSearchResults([{ id: res.data.product?.id, name: res.data.product?.name || "", ref: res.data.product?.default_code || "", lotNumber: res.data.lot?.name || "", expiryDate: res.data.lot?.expiration_date || "", weight: res.data.product?.weight || null }]);
         } else { setSearchResults([]); }
       }
     } catch { setSearchResults([]); }
@@ -1128,12 +1128,17 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
 
   const applySearchResult = (result: any, refIdx: number) => {
     const newRefs = [...pal.refs];
+    const currentQty = Number(newRefs[refIdx].quantity) || 1;
+    const unitWeight = result.weight ? String(result.weight) : newRefs[refIdx].unitWeight;
+    const totalWeight = unitWeight && currentQty ? `${(parseFloat(unitWeight) * currentQty).toFixed(2)} kg` : newRefs[refIdx].weight;
     newRefs[refIdx] = {
       ...newRefs[refIdx],
       productName: result.name || newRefs[refIdx].productName,
       ref: result.ref || newRefs[refIdx].ref,
       lotNumber: result.lotNumber || newRefs[refIdx].lotNumber,
       expiryDate: result.expiryDate || newRefs[refIdx].expiryDate,
+      unitWeight: unitWeight || newRefs[refIdx].unitWeight,
+      weight: totalWeight,
     };
     setPal({ ...pal, refs: newRefs });
     setSearchResults([]);
@@ -2230,8 +2235,8 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                               </div>
                             </div>
                             <div style={{ textAlign: "right", flexShrink: 0 }}>
-                              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{prod.totalQty}</div>
-                              <div style={{ fontSize: 10, color: C.textMuted }}>{prod.cartonCount} crt</div>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>{prod.cartonCount} <span style={{ fontSize: 11, fontWeight: 500 }}>crt</span></div>
+                              <div style={{ fontSize: 11, color: C.textMuted }}>{prod.totalQty} unités</div>
                             </div>
                           </div>
                           <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>

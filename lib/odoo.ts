@@ -44,7 +44,7 @@ export async function write(session: OdooSession, model: string, ids: number[], 
 // ============================================
 // PRODUCT FIELDS
 // ============================================
-const PRODUCT_FIELDS = ["id", "name", "barcode", "default_code", "uom_id", "tracking", "active"];
+const PRODUCT_FIELDS = ["id", "name", "barcode", "default_code", "uom_id", "tracking", "active", "weight"];
 
 // ============================================
 // SMART SCAN — with archived product fallback
@@ -527,7 +527,7 @@ export async function savePackingList(session: OdooSession, name: string, data: 
   let b64 = "";
   const chunk = 8192;
   for (let i = 0; i < bytes.length; i += chunk) {
-    b64 += String.fromCharCode(...Array.from(bytes.slice(i, i + chunk)));
+    b64 += String.fromCharCode(...bytes.slice(i, i + chunk));
   }
   b64 = btoa(b64);
 
