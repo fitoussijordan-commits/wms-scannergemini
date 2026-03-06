@@ -206,6 +206,197 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
 }
 
 // ============================================
+// PALETTE LABEL (GS1 logistics label)
+// ============================================
+export interface PaletteLabelData {
+  // Expéditeur
+  senderName: string;
+  senderAddress?: string;
+  // Destinataire
+  recipientName: string;
+  recipientAddress?: string;
+  // Contenu palette
+  productName: string;
+  ref?: string;
+  lotNumber?: string;
+  sscc: string;           // 18-digit Serial Shipping Container Code
+  quantity: number;
+  unit?: string;          // ex: "cartons", "kg", "unités"
+  expiryDate?: string;    // DLUO / DLC
+  weight?: string;        // ex: "250 kg"
+  // Transport
+  orderRef?: string;      // N° commande
+  deliveryRef?: string;   // N° BL
+}
+
+export function generatePaletteZPL(data: PaletteLabelData): string {
+  // Palette labels use a fixed large format: 100x150mm (A6 landscape-ish)
+  // Overrides the user label size for palettes
+  const W = mm(100); // 800 dots
+  const H = mm(150); // 1200 dots
+  const cW = W - 30;
+  const lineH = 32;
+  const smallH = 24;
+  const sectionGap = 10;
+
+  const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+
+  // ── TOP SECTION: Expéditeur / Destinataire ──────────────────────
+  let y = 12;
+
+  // Separator line helper
+  const hline = (yPos: number) =>
+    `^FO10,${yPos}^GB${W - 20},2,2^FS`;
+
+  // Header: EXPÉDITEUR
+  lines.push(`^FO10,${y}^A0N,20,20^FDExpéditeur^FS`);
+  y += 22;
+  lines.push(`^FO10,${y}^A0N,${lineH},${lineH}^FB${Math.round(cW * 0.5)},1,0,L^FD${trunc(data.senderName, 20)}^FS`);
+  if (data.senderAddress) {
+    lines.push(`^FO10,${y + lineH - 2}^A0N,20,20^FB${Math.round(cW * 0.5)},1,0,L^FD${trunc(data.senderAddress, 30)}^FS`);
+    y += 22;
+  }
+  y += lineH + 4;
+
+  lines.push(hline(y));
+  y += sectionGap + 4;
+
+  // Header: DESTINATAIRE (larger, prominent)
+  lines.push(`^FO10,${y}^A0N,20,20^FDDestinataire^FS`);
+  y += 22;
+  lines.push(`^FO10,${y}^A0N,38,38^FB${cW},1,0,L^FD${trunc(data.recipientName, 18)}^FS`);
+  y += 40;
+  if (data.recipientAddress) {
+    lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,L^FD${trunc(data.recipientAddress, 35)}^FS`);
+    y += 26;
+  }
+
+  lines.push(hline(y));
+  y += sectionGap + 4;
+
+  // ── MIDDLE SECTION: Contenu ──────────────────────────────────────
+  lines.push(`^FO10,${y}^A0N,20,20^FDContenu^FS`);
+  y += 22;
+
+  // Product name (bold / larger)
+  lines.push(`^FO10,${y}^A0N,30,30^FB${cW},1,0,L^FD${trunc(data.productName, 26)}^FS`);
+  y += 34;
+
+  if (data.ref) {
+    lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FDRéf: ${trunc(data.ref, 20)}^FS`);
+    y += smallH + 4;
+  }
+
+  // Quantity + unit on the left, lot on the right
+  const qtyStr = `Qté: ${data.quantity}${data.unit ? " " + data.unit : ""}`;
+  lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FD${qtyStr}^FS`);
+  if (data.lotNumber) {
+    lines.push(`^FO${Math.round(W / 2)},${y}^A0N,${smallH},${smallH}^FDLot: ${trunc(data.lotNumber, 14)}^FS`);
+  }
+  y += smallH + 4;
+
+  if (data.expiryDate || data.weight) {
+    if (data.expiryDate) {
+      lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FDDLUO: ${formatDate(data.expiryDate)}^FS`);
+    }
+    if (data.weight) {
+      lines.push(`^FO${Math.round(W / 2)},${y}^A0N,${smallH},${smallH}^FDPoids: ${data.weight}^FS`);
+    }
+    y += smallH + 4;
+  }
+
+  if (data.orderRef || data.deliveryRef) {
+    if (data.orderRef) {
+      lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FDCDE: ${trunc(data.orderRef, 14)}^FS`);
+    }
+    if (data.deliveryRef) {
+      lines.push(`^FO${Math.round(W / 2)},${y}^A0N,${smallH},${smallH}^FDBL: ${trunc(data.deliveryRef, 14)}^FS`);
+    }
+    y += smallH + 4;
+  }
+
+  lines.push(hline(y + 4));
+  y += sectionGap + 8;
+
+  // ── BOTTOM SECTION: SSCC barcode (GS1-128) ──────────────────────
+  lines.push(`^FO10,${y}^A0N,20,20^FDSSCC (00)^FS`);
+  y += 22;
+
+  // SSCC must be encoded as GS1-128 with AI (00) prefix
+  const ssccPayload = `00${data.sscc}`;
+  const bcH = Math.min(H - y - 30, 100);
+  const barW = 3;
+  const modules = 11 * ssccPayload.length + 35;
+  const bcPixelW = modules * barW;
+  const x = Math.max(10, Math.round((W - bcPixelW) / 2));
+
+  lines.push(`^BY${barW},3,${bcH}^FO${x},${y}^BCN,${bcH},N,N,N^FD>:${ssccPayload}^FS`);
+  y += bcH + 4;
+
+  // SSCC in human-readable below barcode
+  const ssccFormatted = `(00) ${data.sscc.replace(/(\d{2})(\d{7})(\d{9})/, "$1 $2 $3")}`;
+  lines.push(`^FO10,${y}^A0N,20,20^FB${cW},1,0,C^FD${ssccFormatted}^FS`);
+
+  lines.push("^XZ");
+  return lines.join("\n");
+}
+
+// ============================================
+// BLANK / CUSTOM LABEL
+// ============================================
+export interface BlankLabelLine {
+  text: string;
+  fontSize?: number;   // 16–60, default 26
+  align?: "L" | "C" | "R";
+  bold?: boolean;
+}
+
+export interface BlankLabelData {
+  lines: BlankLabelLine[];
+  barcode?: string;    // optional barcode at bottom
+  barcodeLabel?: string; // text to show under barcode
+}
+
+export function generateBlankZPL(data: BlankLabelData): string {
+  const sz = getLabelSize();
+  const W = mm(sz.widthMM);
+  const H = mm(sz.heightMM);
+  const cW = W - 20;
+
+  const zplLines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+
+  // Calculate total height needed
+  const lineHeights = data.lines.map(l => (l.fontSize ?? 26) + 6);
+  const bcH = data.barcode ? Math.min(Math.round(H * 0.35), 100) : 0;
+  const bcLabelH = data.barcode ? 26 : 0;
+  const totalContent = lineHeights.reduce((a, b) => a + b, 0) + bcH + bcLabelH;
+  let y = Math.max(8, Math.round((H - totalContent) / 2));
+
+  for (const line of data.lines) {
+    const fs = Math.min(60, Math.max(16, line.fontSize ?? 26));
+    const align = line.align ?? "C";
+    const cpl = Math.floor(cW / (fs * 0.6));
+    zplLines.push(
+      `^FO10,${y}^A0N,${fs},${fs}^FB${cW},1,0,${align}^FD${trunc(line.text, cpl)}^FS`
+    );
+    y += fs + 6;
+  }
+
+  if (data.barcode) {
+    y += 6;
+    const barW = sz.widthMM >= 60 ? 3 : 2;
+    zplLines.push(barcodeZPL(data.barcode, W, y, bcH, barW));
+    y += bcH + 4;
+    if (data.barcodeLabel) {
+      zplLines.push(`^FO10,${y}^A0N,20,20^FB${cW},1,0,C^FD${trunc(data.barcodeLabel, 40)}^FS`);
+    }
+  }
+
+  zplLines.push("^XZ");
+  return zplLines.join("\n");
+}
+
+// ============================================
 // PRINT FUNCTIONS
 // ============================================
 export async function printProductLabel(
@@ -234,6 +425,26 @@ export async function printLocationLabel(
   try {
     const zpl = generateLocationZPL(locationName, locationBarcode);
     const jobId = await submitPrintJob(printerId, `Empl: ${locationName}`, zpl, qty);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
+export async function printPaletteLabel(
+  printerId: number, data: PaletteLabelData, qty: number = 1
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const zpl = generatePaletteZPL(data);
+    const jobId = await submitPrintJob(printerId, `Palette: ${data.productName} → ${data.recipientName}`, zpl, qty);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
+export async function printBlankLabel(
+  printerId: number, data: BlankLabelData, title: string = "Étiquette", qty: number = 1
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const zpl = generateBlankZPL(data);
+    const jobId = await submitPrintJob(printerId, title, zpl, qty);
     return { success: true, jobId };
   } catch (e: any) { return { success: false, error: e.message }; }
 }
