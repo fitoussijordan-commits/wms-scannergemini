@@ -218,7 +218,7 @@ const PICKING_FIELDS = [
   "id", "name", "state", "scheduled_date", "date_deadline", "date",
   "partner_id", "origin", "picking_type_id", "group_id",
   "move_ids_without_package", "location_id", "location_dest_id",
-  "x_studio_date_dexpdition_prvue",
+  "x_studio_date_dexpdition_prvue", "x_studio_etiquettes_commande",
 ];
 
 // Get pick-type pickings in confirmed/assigned state (preparation)
@@ -291,19 +291,35 @@ export async function getOutgoingPickings(session: OdooSession) {
     }
   }
 
+  // Filter out pickings tagged "En attente" via x_studio_etiquettes_commande
+  const tagIds = Array.from(new Set(
+    pickings.flatMap((p: any) => p.x_studio_etiquettes_commande || [])
+  )) as number[];
+  let excludeTagIds: number[] = [];
+  if (tagIds.length > 0) {
+    const tags = await searchRead(session, "crm.tag", [["id", "in", tagIds]], ["id", "name"], tagIds.length);
+    excludeTagIds = tags.filter((t: any) => t.name?.toLowerCase().includes("en attente")).map((t: any) => t.id);
+  }
+  const filteredPickings = excludeTagIds.length > 0
+    ? pickings.filter((p: any) => {
+        const pTags: number[] = p.x_studio_etiquettes_commande || [];
+        return !pTags.some((tid: number) => excludeTagIds.includes(tid));
+      })
+    : pickings;
+
   // Use x_studio_date_dexpdition_prvue as primary date if available
-  for (const p of pickings) {
+  for (const p of filteredPickings) {
     if (p.x_studio_date_dexpdition_prvue) p.shipping_date = p.x_studio_date_dexpdition_prvue;
   }
 
   // Sort by shipping_date asc, no date → end
-  pickings.sort((a: any, b: any) => {
+  filteredPickings.sort((a: any, b: any) => {
     const da = a.shipping_date || a.date_deadline || a.scheduled_date || "9999";
     const db = b.shipping_date || b.date_deadline || b.scheduled_date || "9999";
     return da < db ? -1 : da > db ? 1 : 0;
   });
 
-  return pickings;
+  return filteredPickings;
 }
 
 // Get move lines for a picking (what needs to be prepared)
