@@ -2458,6 +2458,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [selectedLocation, setSelectedLocation] = useState<any>(null);
   const [quants, setQuants] = useState<any[]>([]);
   const [loadingQuants, setLoadingQuants] = useState(false);
   const [adjustments, setAdjustments] = useState<Record<number, string>>({}); // quantId -> new qty string
@@ -2470,35 +2471,46 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
     try {
       const result = await odoo.smartScan(session, query.trim());
       if (result.type === "product") {
-        // data is product.product record
-        setSearchResults([{ productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
+        setSearchResults([{ kind: "product", productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
       } else if (result.type === "lot") {
-        // data is { lot, product }
         const prod = result.data.product;
-        setSearchResults([{ productName: prod?.name || result.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || result.data.lot.product_id[0], lotName: result.data.lot.name }]);
+        setSearchResults([{ kind: "product", productName: prod?.name || result.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || result.data.lot.product_id[0], lotName: result.data.lot.name }]);
+      } else if (result.type === "location") {
+        setSearchResults([{ kind: "location", locationName: result.data.complete_name || result.data.name, id: result.data.id }]);
       } else {
         setSearchResults([]);
-        onToast("Aucun produit trouvé");
+        onToast("Aucun résultat trouvé");
       }
     } catch (e: any) { onToast("Erreur: " + e.message); }
     setSearching(false);
   };
 
-  const selectProduct = async (result: any) => {
-    setSelectedProduct(result);
+  const selectItem = async (result: any) => {
     setSearchResults([]);
     setQuery("");
     setAdjustments({});
     setLoadingQuants(true);
-    try {
-      const productId = result.id;
-      const data = await odoo.getQuantsForProduct(session, productId);
-      setQuants(data);
-      // Pre-fill adjustments with current quantities
-      const init: Record<number, string> = {};
-      for (const q of data) init[q.id] = String(q.quantity);
-      setAdjustments(init);
-    } catch (e: any) { onToast("Erreur chargement stock: " + e.message); }
+    if (result.kind === "location") {
+      setSelectedLocation(result);
+      setSelectedProduct(null);
+      try {
+        const data = await odoo.getProductsAtLocation(session, result.id);
+        setQuants(data);
+        const init: Record<number, string> = {};
+        for (const q of data) init[q.id] = String(q.quantity);
+        setAdjustments(init);
+      } catch (e: any) { onToast("Erreur chargement stock: " + e.message); }
+    } else {
+      setSelectedProduct(result);
+      setSelectedLocation(null);
+      try {
+        const data = await odoo.getQuantsForProduct(session, result.id);
+        setQuants(data);
+        const init: Record<number, string> = {};
+        for (const q of data) init[q.id] = String(q.quantity);
+        setAdjustments(init);
+      } catch (e: any) { onToast("Erreur chargement stock: " + e.message); }
+    }
     setLoadingQuants(false);
   };
 
@@ -2562,12 +2574,18 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
         {searchResults.length > 0 && (
           <div style={{ marginTop: 8 }}>
             {searchResults.map((r, i) => (
-              <button key={i} onClick={() => selectProduct(r)}
+              <button key={i} onClick={() => selectItem(r)}
                 style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: C.white, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left" as const, marginBottom: 4 }}>
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.productName}</div>
-                  {r.ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {r.ref}</div>}
-                  {r.lotName && <div style={{ fontSize: 11, color: C.blue }}>Lot: {r.lotName}</div>}
+                  {r.kind === "location" ? (
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>📍 {r.locationName}</div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.productName}</div>
+                      {r.ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {r.ref}</div>}
+                      {r.lotName && <div style={{ fontSize: 11, color: C.blue }}>Lot: {r.lotName}</div>}
+                    </>
+                  )}
                 </div>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
               </button>
@@ -2577,15 +2595,21 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
       </Section>
 
       {/* Selected product + quants */}
-      {selectedProduct && (
+      {(selectedProduct || selectedLocation) && (
         <>
           <Section>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div>
-                <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{selectedProduct.productName}</div>
-                {selectedProduct.ref && <div style={{ fontSize: 12, color: C.textMuted }}>Réf: {selectedProduct.ref}</div>}
+                {selectedLocation ? (
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "#059669" }}>📍 {selectedLocation.locationName}</div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{selectedProduct.productName}</div>
+                    {selectedProduct.ref && <div style={{ fontSize: 12, color: C.textMuted }}>Réf: {selectedProduct.ref}</div>}
+                  </>
+                )}
               </div>
-              <button onClick={() => { setSelectedProduct(null); setQuants([]); setAdjustments({}); }}
+              <button onClick={() => { setSelectedProduct(null); setSelectedLocation(null); setQuants([]); setAdjustments({}); }}
                 style={{ fontSize: 11, color: C.textMuted, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>✕ Changer</button>
             </div>
 
@@ -2613,8 +2637,11 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
                     }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{q.location_id[1]}</div>
-                          {q.lot_id && <div style={{ fontSize: 11, color: C.blue }}>Lot: {q.lot_id[1]}{q.expiry ? ` · Exp: ${new Date(q.expiry).toLocaleDateString("fr-FR")}` : ""}</div>}
+                          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                            {selectedLocation ? (q.product_id?.[1] || "Produit") : q.location_id[1]}
+                          </div>
+                          {selectedLocation && q.product_ref && <div style={{ fontSize: 11, color: C.textMuted }}>Réf: {q.product_ref}</div>}
+                          {q.lot_id && <div style={{ fontSize: 11, color: C.blue }}>Lot: {q.lot_id[1]}{q.expiry || q.expiration_date ? ` · Exp: ${new Date(q.expiry || q.expiration_date).toLocaleDateString("fr-FR")}` : ""}</div>}
                           {q.reserved_quantity > 0 && <div style={{ fontSize: 10, color: C.orange }}>Réservé: {q.reserved_quantity}</div>}
                         </div>
                         {changed && (
