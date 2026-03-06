@@ -45,7 +45,7 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 // PRINT JOB (via server proxy)
 // ============================================
-async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
+async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1, usePdf: boolean = false, labelWidthMM?: number, labelHeightMM?: number): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
   const res = await fetch("/api/printnode", {
     method: "POST",
@@ -56,6 +56,9 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       title,
       content: btoa(fullZpl),
       source: "WMS Scanner",
+      usePdf,
+      labelWidthMM,
+      labelHeightMM,
     }),
   });
   if (!res.ok) {
@@ -434,7 +437,8 @@ export async function printPaletteLabel(
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
     const zpl = generatePaletteZPL(data);
-    const jobId = await submitPrintJob(printerId, `Palette: ${data.productName} → ${data.recipientName}`, zpl, qty);
+    const cfg = getLabelTypeConfig("palette");
+    const jobId = await submitPrintJob(printerId, `Palette: ${data.productName} → ${data.recipientName}`, zpl, qty, true, cfg.labelSize.widthMM, cfg.labelSize.heightMM);
     return { success: true, jobId };
   } catch (e: any) { return { success: false, error: e.message }; }
 }
