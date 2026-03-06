@@ -2391,11 +2391,22 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                               <div style={{ fontSize: 11, color: C.textMuted }}>{prod.totalQty} unités</div>
                             </div>
                           </div>
-                          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" as const, alignItems: "center" }}>
                             {prod.lot && (
-                              <span style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 6 }}>
-                                Lot {prod.lot}
-                              </span>
+                              <button
+                                onClick={() => requestPrint({ type: "lot", title: prod.lot, barcode: prod.lot, lotName: prod.lot, productName: match?.product_name || prod.desc, expiryDate: prod.expiry })}
+                                title="Imprimer étiquette lot"
+                                style={{ fontSize: 11, fontWeight: 600, color: C.blue, background: C.blueSoft, padding: "2px 8px", borderRadius: 6, border: `1px solid ${C.blue}`, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                                🖨 Lot {prod.lot}
+                              </button>
+                            )}
+                            {match?.default_code && (
+                              <button
+                                onClick={() => requestPrint({ type: "product", title: match.product_name || prod.desc, barcode: match.barcode || match.default_code, ref: match.default_code, productName: match.product_name || prod.desc })}
+                                title="Imprimer étiquette produit"
+                                style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f5f3ff", padding: "2px 8px", borderRadius: 6, border: "1px solid #7c3aed", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                                🖨 {match.default_code}
+                              </button>
                             )}
                             {prod.expiry && (
                               <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>
@@ -2403,9 +2414,12 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                               </span>
                             )}
                             {loc && (
-                              <span style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6 }}>
+                              <button
+                                onClick={() => requestPrint({ type: "location", title: loc.location_name, barcode: loc.location_name, locationName: loc.location_name })}
+                                title="Imprimer étiquette emplacement"
+                                style={{ fontSize: 11, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 6, border: "1px solid #059669", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
                                 📍 {loc.location_name} ({loc.quantity} en stock)
-                              </span>
+                              </button>
                             )}
                             {isMatched && !loc && (
                               <span style={{ fontSize: 11, color: C.orange, background: C.orangeSoft, padding: "2px 8px", borderRadius: 6 }}>
