@@ -167,7 +167,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -622,6 +622,8 @@ export default function Page() {
               <div style={{ height: 10 }} />
               <BigButton icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} label="Historique" sub={`${history.length} transfert${history.length > 1 ? "s" : ""} enregistré${history.length > 1 ? "s" : ""}`} color="#64748b" onClick={() => setScreen("history")} />
             </>}
+            <div style={{ height: 10 }} />
+            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>} label="Impression étiquettes" sub="Palette, vierge, produit" color="#0891b2" onClick={() => setScreen("labels")} />
           </div>
 
           {/* PrintNode printer config — moved to settings */}
@@ -844,6 +846,11 @@ export default function Page() {
         {screen === "arrival" && session && (
           <ArrivalScreen session={session} onBack={goHome} onToast={showToast} />
         )}
+
+        {/* ===== LABELS ===== */}
+        {screen === "labels" && (
+          <LabelsScreen onBack={goHome} onToast={showToast} />
+        )}
       </main>
 
       {/* Print Modal — rendered at root level for z-index */}
@@ -1060,6 +1067,248 @@ function Alert({ type, children }: { type: string; children: React.ReactNode }) 
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 10, background: c.bg, border: `1px solid ${c.border}`, marginBottom: 12, animation: "slideUp .15s" }}>
       <span style={{ fontSize: 14, fontWeight: 700, color: c.color }}>{c.icon}</span>
       <span style={{ fontSize: 13, fontWeight: 500, color: c.color }}>{children}</span>
+    </div>
+  );
+}
+
+// ============================================
+// LABELS SCREEN
+// ============================================
+function LabelsScreen({ onBack, onToast }: { onBack: () => void; onToast: (msg: string) => void }) {
+  const [tab, setTab] = useState<"blank" | "palette" | "product">("blank");
+  const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
+  const [printerId, setPrinterId] = useState<number | null>(pn.getSavedPrinterId());
+  const [labelSize, setLabelSize] = useState<pn.LabelSize>(pn.getLabelSize());
+  const [qty, setQty] = useState(1);
+  const [loading, setLoading] = useState(false);
+
+  // Blank label state
+  const [blankLines, setBlankLines] = useState([{ text: "", fontSize: 26, align: "C" as "L"|"C"|"R" }]);
+  const [blankBarcode, setBlankBarcode] = useState("");
+
+  // Palette label state
+  const [pal, setPal] = useState({
+    senderName: "", senderAddress: "",
+    recipientName: "", recipientAddress: "",
+    productName: "", ref: "", lotNumber: "",
+    sscc: "", quantity: 1, unit: "cartons",
+    expiryDate: "", weight: "",
+    orderRef: "", deliveryRef: "",
+  });
+
+  // Product label state
+  const [prod, setProd] = useState({ productName: "", barcode: "", ref: "" });
+
+  useEffect(() => {
+    pn.listPrinters().then(setPrinters).catch(() => {});
+  }, []);
+
+  const savePrinter = (id: number) => { setPrinterId(id); pn.savePrinterId(id); };
+  const saveSize = (s: pn.LabelSize) => { setLabelSize(s); pn.saveLabelSize(s); };
+
+  const handlePrint = async () => {
+    if (!printerId) { onToast("⚠️ Sélectionne une imprimante"); return; }
+    setLoading(true);
+    let result: { success: boolean; error?: string };
+    try {
+      if (tab === "blank") {
+        const lines = blankLines.filter(l => l.text.trim());
+        if (!lines.length) { onToast("⚠️ Ajoute au moins une ligne"); setLoading(false); return; }
+        result = await pn.printBlankLabel(printerId, { lines, barcode: blankBarcode || undefined }, "Étiquette vierge", qty);
+      } else if (tab === "palette") {
+        if (!pal.sscc || !pal.productName || !pal.recipientName) { onToast("⚠️ SSCC, produit et destinataire requis"); setLoading(false); return; }
+        result = await pn.printPaletteLabel(printerId, { ...pal, quantity: Number(pal.quantity) }, qty);
+      } else {
+        if (!prod.productName || !prod.barcode) { onToast("⚠️ Nom produit et code-barres requis"); setLoading(false); return; }
+        result = await pn.printProductLabel(printerId, prod.productName, prod.barcode, prod.ref || undefined, qty);
+      }
+      if (result.success) onToast("✅ Impression envoyée");
+      else onToast("❌ " + (result.error || "Erreur impression"));
+    } catch (e: any) { onToast("❌ " + e.message); }
+    setLoading(false);
+  };
+
+  const inp = (val: string, onChange: (v: string) => void, placeholder: string, label: string) => (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>{label}</div>
+      <input value={val} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+        style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none", boxSizing: "border-box", background: C.white }} />
+    </div>
+  );
+
+  const TABS = [
+    { id: "blank" as const, label: "✏️ Vierge" },
+    { id: "palette" as const, label: "🏭 Palette" },
+    { id: "product" as const, label: "📦 Produit" },
+  ];
+
+  const SIZES = [
+    { label: "70×45", w: 70, h: 45 },
+    { label: "100×150", w: 100, h: 150 },
+    { label: "100×70", w: 100, h: 70 },
+    { label: "50×30", w: 50, h: 30 },
+  ];
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, display: "flex", alignItems: "center", color: C.blue }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>Impression étiquettes</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>Choisis un modèle et configure ton étiquette</div>
+        </div>
+      </div>
+
+      {/* Printer + Size config */}
+      <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, padding: 14, marginBottom: 14, boxShadow: C.shadow }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Configuration</div>
+
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Imprimante</div>
+          <select value={printerId ?? ""} onChange={e => savePrinter(Number(e.target.value))}
+            style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", background: C.white, outline: "none" }}>
+            <option value="">-- Sélectionner --</option>
+            {printers.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Taille (mm)</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {SIZES.map(s => (
+                <button key={s.label} onClick={() => saveSize({ widthMM: s.w, heightMM: s.h })}
+                  style={{ padding: "6px 10px", borderRadius: 6, border: `1px solid ${labelSize.widthMM === s.w && labelSize.heightMM === s.h ? C.blue : C.border}`,
+                    background: labelSize.widthMM === s.w && labelSize.heightMM === s.h ? C.blueSoft : C.white,
+                    color: labelSize.widthMM === s.w && labelSize.heightMM === s.h ? C.blue : C.text,
+                    fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  {s.label}
+                </button>
+              ))}
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <input type="number" value={labelSize.widthMM} onChange={e => saveSize({ ...labelSize, widthMM: Number(e.target.value) })}
+                  style={{ width: 52, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center", fontFamily: "inherit" }} />
+                <span style={{ fontSize: 11, color: C.textMuted }}>×</span>
+                <input type="number" value={labelSize.heightMM} onChange={e => saveSize({ ...labelSize, heightMM: Number(e.target.value) })}
+                  style={{ width: 52, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center", fontFamily: "inherit" }} />
+              </div>
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Qté</div>
+            <input type="number" min={1} max={99} value={qty} onChange={e => setQty(Math.max(1, Number(e.target.value)))}
+              style={{ width: 60, padding: "10px 8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, textAlign: "center", fontFamily: "inherit" }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 14 }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            style={{ flex: 1, padding: "11px 0", fontSize: 12, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit", transition: "all .15s",
+              background: tab === t.id ? C.blue : "transparent",
+              color: tab === t.id ? "#fff" : C.textSec }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, padding: 14, marginBottom: 14, boxShadow: C.shadow }}>
+
+        {tab === "blank" && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Lignes de texte</div>
+            {blankLines.map((line, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+                <input value={line.text} onChange={e => { const l = [...blankLines]; l[i] = { ...l[i], text: e.target.value }; setBlankLines(l); }}
+                  placeholder={`Ligne ${i + 1}...`}
+                  style={{ flex: 1, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 14, fontFamily: "inherit" }} />
+                <input type="number" min={14} max={60} value={line.fontSize}
+                  onChange={e => { const l = [...blankLines]; l[i] = { ...l[i], fontSize: Number(e.target.value) }; setBlankLines(l); }}
+                  title="Taille police"
+                  style={{ width: 50, padding: "9px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, textAlign: "center", fontFamily: "inherit" }} />
+                <select value={line.align} onChange={e => { const l = [...blankLines]; l[i] = { ...l[i], align: e.target.value as "L"|"C"|"R" }; setBlankLines(l); }}
+                  style={{ padding: "9px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontFamily: "inherit" }}>
+                  <option value="L">◀</option>
+                  <option value="C">◈</option>
+                  <option value="R">▶</option>
+                </select>
+                {blankLines.length > 1 && (
+                  <button onClick={() => setBlankLines(blankLines.filter((_, j) => j !== i))}
+                    style={{ padding: "9px 10px", border: `1px solid ${C.redBorder}`, borderRadius: 7, background: C.redSoft, color: C.red, cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>✕</button>
+                )}
+              </div>
+            ))}
+            {blankLines.length < 6 && (
+              <button onClick={() => setBlankLines([...blankLines, { text: "", fontSize: 26, align: "C" }])}
+                style={{ width: "100%", padding: "8px", border: `1px dashed ${C.border}`, borderRadius: 7, background: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 13, fontFamily: "inherit", marginBottom: 12 }}>
+                + Ajouter une ligne
+              </button>
+            )}
+            <div style={{ marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Code-barres (optionnel)</div>
+              <input value={blankBarcode} onChange={e => setBlankBarcode(e.target.value)} placeholder="Ex: 3760123456789"
+                style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box" }} />
+            </div>
+          </div>
+        )}
+
+        {tab === "palette" && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Expéditeur</div>
+            {inp(pal.senderName, v => setPal({ ...pal, senderName: v }), "Nom expéditeur", "Nom *")}
+            {inp(pal.senderAddress, v => setPal({ ...pal, senderAddress: v }), "Adresse, ville", "Adresse")}
+            <div style={{ height: 2, background: C.border, margin: "12px 0" }} />
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Destinataire</div>
+            {inp(pal.recipientName, v => setPal({ ...pal, recipientName: v }), "Nom destinataire *", "Nom *")}
+            {inp(pal.recipientAddress, v => setPal({ ...pal, recipientAddress: v }), "Adresse, ville", "Adresse")}
+            <div style={{ height: 2, background: C.border, margin: "12px 0" }} />
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Contenu palette</div>
+            {inp(pal.productName, v => setPal({ ...pal, productName: v }), "Nom du produit *", "Produit *")}
+            {inp(pal.ref, v => setPal({ ...pal, ref: v }), "Référence interne", "Référence")}
+            {inp(pal.lotNumber, v => setPal({ ...pal, lotNumber: v }), "N° de lot", "N° lot")}
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 4 }}>Quantité *</div>
+                <input type="number" min={1} value={pal.quantity} onChange={e => setPal({ ...pal, quantity: Number(e.target.value) })}
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                {inp(pal.unit, v => setPal({ ...pal, unit: v }), "cartons, kg…", "Unité")}
+              </div>
+            </div>
+            {inp(pal.expiryDate, v => setPal({ ...pal, expiryDate: v }), "YYYY-MM-DD", "DLUO / DLC")}
+            {inp(pal.weight, v => setPal({ ...pal, weight: v }), "Ex: 250 kg", "Poids")}
+            <div style={{ height: 2, background: C.border, margin: "12px 0" }} />
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Transport</div>
+            {inp(pal.sscc, v => setPal({ ...pal, sscc: v }), "18 chiffres (SSCC) *", "SSCC *")}
+            {inp(pal.orderRef, v => setPal({ ...pal, orderRef: v }), "N° commande", "N° commande")}
+            {inp(pal.deliveryRef, v => setPal({ ...pal, deliveryRef: v }), "N° BL", "N° BL")}
+          </div>
+        )}
+
+        {tab === "product" && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 10 }}>Étiquette produit</div>
+            {inp(prod.productName, v => setProd({ ...prod, productName: v }), "Nom du produit *", "Produit *")}
+            {inp(prod.barcode, v => setProd({ ...prod, barcode: v }), "EAN13, EAN8 ou Code128 *", "Code-barres *")}
+            {inp(prod.ref, v => setProd({ ...prod, ref: v }), "Référence (optionnel)", "Référence")}
+          </div>
+        )}
+      </div>
+
+      {/* Print button */}
+      <button onClick={handlePrint} disabled={loading || !printerId}
+        style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", cursor: loading || !printerId ? "not-allowed" : "pointer",
+          background: loading || !printerId ? C.borderStrong : C.blue, color: "#fff",
+          fontSize: 15, fontWeight: 800, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        {loading ? "Envoi en cours..." : `🖨️ Imprimer ${qty > 1 ? `(×${qty})` : ""}`}
+      </button>
     </div>
   );
 }
