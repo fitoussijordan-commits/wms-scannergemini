@@ -1090,7 +1090,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const [pal, setPal] = useState({
     senderName: "", senderAddress: "",
     recipientName: "", recipientAddress: "",
-    refs: [{ productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", weight: "" }],
+    refs: [{ productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", unitWeight: "", weight: "" }],
     sscc: "", orderRef: "", deliveryRef: "",
   });
 
@@ -1141,7 +1141,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     setActiveRefIdx(null);
   };
 
-  const addRef = () => setPal({ ...pal, refs: [...pal.refs, { productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", weight: "" }] });
+  const addRef = () => setPal({ ...pal, refs: [...pal.refs, { productName: "", ref: "", lotNumber: "", quantity: 1, unit: "cartons", expiryDate: "", unitWeight: "", weight: "" }] });
   const removeRef = (i: number) => setPal({ ...pal, refs: pal.refs.filter((_, j) => j !== i) });
   const updateRef = (i: number, key: string, val: any) => {
     const newRefs = [...pal.refs];
@@ -1387,9 +1387,20 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
                       style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 3 }}>Poids</div>
-                    <input value={ref.weight} onChange={e => updateRef(i, "weight", e.target.value)} placeholder="Ex: 250 kg"
+                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 3 }}>Poids unitaire (kg)</div>
+                    <input type="number" min={0} step={0.01} value={ref.unitWeight}
+                      onChange={e => {
+                        const uw = e.target.value;
+                        const total = uw && ref.quantity ? `${(parseFloat(uw) * Number(ref.quantity)).toFixed(2)} kg` : "";
+                        const newRefs = [...pal.refs]; newRefs[i] = { ...newRefs[i], unitWeight: uw, weight: total }; setPal({ ...pal, refs: newRefs });
+                      }}
+                      placeholder="kg/unité"
                       style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 3 }}>Poids total</div>
+                    <input value={ref.weight} onChange={e => updateRef(i, "weight", e.target.value)} placeholder="Calculé auto"
+                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const, background: ref.unitWeight ? "#f0fdf4" : undefined }} />
                   </div>
                 </div>
               </div>
@@ -1862,6 +1873,78 @@ const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 // ============================================
 // ARRIVAL SCREEN — Packing List Import
 // ============================================
+// ============================================
+// PALLET REF SEARCH
+// ============================================
+function PalletRefSearch({ packingData, matchData }: { packingData: any; matchData: Record<string, any> }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<{ palletNo: string; supplierRef: string; productName: string; lot: string; expiry: string; qty: number; cartonCount: number }[]>([]);
+
+  const search = () => {
+    if (!query.trim()) { setResults([]); return; }
+    const q = query.trim().toLowerCase();
+    const found: typeof results = [];
+    for (const pallet of packingData.pallets) {
+      const summary: Record<string, any> = {};
+      for (const c of pallet.cartons) {
+        const key = `${c.supplierRef}_${c.lot}`;
+        if (!summary[key]) summary[key] = { palletNo: pallet.palletNo, supplierRef: c.supplierRef, lot: c.lot, expiry: c.expiry, qty: 0, cartonCount: 0 };
+        summary[key].qty += c.qtyProduct;
+        summary[key].cartonCount += 1;
+      }
+      for (const v of Object.values(summary) as any[]) {
+        const match = matchData[v.supplierRef];
+        const name = match?.product_name || match?.default_code || v.supplierRef;
+        if (
+          v.supplierRef?.toLowerCase().includes(q) ||
+          name?.toLowerCase().includes(q) ||
+          match?.default_code?.toLowerCase().includes(q) ||
+          v.lot?.toLowerCase().includes(q)
+        ) {
+          found.push({ ...v, productName: name });
+        }
+      }
+    }
+    setResults(found);
+  };
+
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, border: `1px solid ${C.border}`, padding: 14, marginBottom: 14, boxShadow: C.shadow }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 10 }}>🔍 Trouver une référence</div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && search()}
+          placeholder="Réf fournisseur, nom produit, lot..."
+          style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }} />
+        <button onClick={search}
+          style={{ padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontFamily: "inherit", fontSize: 13 }}>
+          OK
+        </button>
+      </div>
+      {results.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          {results.map((r, i) => (
+            <div key={i} style={{ padding: "10px 12px", background: C.bg, borderRadius: 8, marginBottom: 6, borderLeft: `3px solid ${C.blue}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{r.productName}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>Réf: {r.supplierRef}{r.lot ? ` · Lot: ${r.lot}` : ""}{r.expiry ? ` · Exp: ${r.expiry}` : ""}</div>
+                </div>
+                <div style={{ textAlign: "right" as const, flexShrink: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: C.blue }}>Palette {r.palletNo}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted }}>{r.cartonCount} colis · {r.qty} unités</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {results.length === 0 && query && (
+        <div style={{ marginTop: 8, fontSize: 12, color: C.textMuted, textAlign: "center" as const }}>Aucun résultat pour "{query}"</div>
+      )}
+    </div>
+  );
+}
+
 function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   const [step, setStep] = useState<"list" | "result">("list");
   const [loading, setLoading] = useState(false);
@@ -2086,6 +2169,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 
           {error && <Alert type="error">{error}</Alert>}
 
+          {/* Search by ref */}
+          {packingData && (
+            <PalletRefSearch packingData={packingData} matchData={matchData} />
+          )}
+
           {/* Palettes */}
           {packingData.pallets.map((pallet: any, pi: number) => {
             const isOpen = !!openPallets[pallet.palletNo];
@@ -2112,11 +2200,11 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
                     <span style={{ fontSize: 16 }}>🔷</span>
                     <div style={{ textAlign: "left" }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pallet.palletNo}</div>
-                      <div style={{ fontSize: 11, color: C.textMuted }}>{pallet.cartons.length} carton(s) · {products.length} réf(s){pallet.dimensions ? ` · ${pallet.dimensions}` : ""}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted }}><span style={{ fontWeight: 700, color: C.text }}>{pallet.cartons.length} colis</span> · {products.length} réf(s){pallet.dimensions ? ` · ${pallet.dimensions}` : ""}</div>
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 10 }}>{pallet.cartons.length}</span>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: "#059669", background: "#ecfdf5", padding: "2px 10px", borderRadius: 10 }}>{pallet.cartons.length}<span style={{ fontSize: 10, fontWeight: 500, marginLeft: 2 }}>colis</span></span>
                     <span style={{ fontSize: 12, color: C.textMuted, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }}>▼</span>
                   </div>
                 </button>
