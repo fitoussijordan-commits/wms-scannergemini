@@ -521,46 +521,57 @@ export async function getProductLocations(session: OdooSession, productIds: numb
 // ============================================
 
 export async function savePackingList(session: OdooSession, name: string, data: any) {
-  // Store as JSON in ir.attachment
   const jsonStr = JSON.stringify(data);
-  const b64 = typeof btoa !== "undefined" ? btoa(unescape(encodeURIComponent(jsonStr))) : Buffer.from(jsonStr).toString("base64");
-  
+  // Encode to base64 safely (handle unicode)
+  const bytes = new TextEncoder().encode(jsonStr);
+  let b64 = "";
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    b64 += String.fromCharCode(...bytes.slice(i, i + chunk));
+  }
+  b64 = btoa(b64);
+
+  const fileName = `packing_${name}.json`;
+
   // Check if one already exists with same name
-  const existing = await searchRead(session, "ir.attachment", [["name", "=", `packing_${name}.json`], ["res_model", "=", "stock.picking"]], ["id"], 1);
+  const existing = await searchRead(session, "ir.attachment", [["name", "=", fileName]], ["id"], 1);
   if (existing.length > 0) {
-    // Update existing
     await write(session, "ir.attachment", [existing[0].id], { datas: b64 });
     return existing[0].id;
   }
-  
-  // Create new
+
+  // Create new — no res_model/res_id to avoid permission issues
   return create(session, "ir.attachment", {
-    name: `packing_${name}.json`,
+    name: fileName,
     type: "binary",
     datas: b64,
-    res_model: "stock.picking",
-    res_id: 0,
     mimetype: "application/json",
+    public: true,
   });
 }
 
 export async function loadPackingList(session: OdooSession, name: string) {
+  const fileName = `packing_${name}.json`;
   const attachments = await searchRead(
     session, "ir.attachment",
-    [["name", "=", `packing_${name}.json`], ["res_model", "=", "stock.picking"]],
+    [["name", "=", fileName]],
     ["id", "name", "datas", "write_date"],
     1, "write_date desc"
   );
   if (!attachments.length) return null;
   const b64 = attachments[0].datas;
-  const jsonStr = typeof atob !== "undefined" ? decodeURIComponent(escape(atob(b64))) : Buffer.from(b64, "base64").toString("utf-8");
+  // Decode base64 safely
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const jsonStr = new TextDecoder().decode(bytes);
   return { ...JSON.parse(jsonStr), _attachmentId: attachments[0].id, _savedAt: attachments[0].write_date };
 }
 
 export async function listPackingLists(session: OdooSession) {
   return searchRead(
     session, "ir.attachment",
-    [["name", "ilike", "packing_"], ["name", "ilike", ".json"], ["res_model", "=", "stock.picking"]],
+    [["name", "ilike", "packing_"], ["name", "ilike", ".json"]],
     ["id", "name", "write_date", "create_date"],
     50, "write_date desc"
   );

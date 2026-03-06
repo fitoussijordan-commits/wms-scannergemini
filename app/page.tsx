@@ -1598,9 +1598,9 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
       const data = await res.json();
       setPackingData(data);
 
-      // Save to Odoo for sharing across devices
+      // Save to Odoo for sharing (non-blocking)
       const saveName = data.transportNr || `import_${Date.now()}`;
-      await odoo.savePackingList(session, saveName, data);
+      try { await odoo.savePackingList(session, saveName, data); } catch (saveErr: any) { console.warn("Sauvegarde packing list:", saveErr.message); }
 
       await enrichWithOdoo(data);
 
