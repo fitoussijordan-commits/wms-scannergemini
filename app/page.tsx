@@ -57,7 +57,7 @@ async function executePrint(req: PrintRequest, copies: number) {
     if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
     if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
     if (req.type === "location") return pn.printLocationLabel(printerId, req.locationName || req.title, req.barcode, copies);
-    if (req.type === "picking") return pn.printBlankLabel(printerId, { lines: [{ text: req.title, fontSize: 24, align: "C" as "C" }], barcode: req.barcode }, req.title, copies);
+    if (req.type === "picking") { const pickCfg = pn.getLabelTypeConfig("picking"); const pickPrinter = pickCfg.printerId || printerId; return pn.printBlankLabel(pickPrinter, { lines: [{ text: req.title, fontSize: 24, align: "C" as "C" }], barcode: req.barcode }, req.title, copies); }
   }
   // Fallback popup (single copy)
   printLabelPopup(req.title, req.barcode, req.barcode);
@@ -2822,6 +2822,7 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
     { key: "location", label: "Étiquette emplacement", icon: "📍", hasSize: true },
     { key: "palette", label: "Étiquette palette", icon: "🏭", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
+    { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
@@ -2862,6 +2863,7 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
     else if (type === "lot") r = await pn.printLotLabel(cfg.printerId, "LOT-001", "Produit Test", "LOT-001");
     else if (type === "location") r = await pn.printLocationLabel(cfg.printerId, "A42-RKD1", "B-A42");
     else if (type === "palette") r = await pn.printPaletteLabel(cfg.printerId, { senderName: "TEST", recipientName: "DEST", productName: "Produit Test", ref: "REF001", lotNumber: "LOT001", quantity: 10, unit: "cartons", expiryDate: "", weight: "50 kg", sscc: "000123456789012340", orderRef: "CMD-TEST", deliveryRef: "BL-TEST" });
+    else if (type === "picking") r = await pn.printBlankLabel(cfg.printerId, { lines: [{ text: "WH/PICK/TEST", fontSize: 24, align: "C" as "C" }], barcode: "WH/PICK/TEST" });
     else r = await pn.printBlankLabel(cfg.printerId, { lines: [{ text: "TEST VIERGE", fontSize: 30, align: "C" }] });
     setMsg(r?.success ? "✓ Test envoyé" : "✕ " + r?.error);
   };

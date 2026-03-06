@@ -479,7 +479,7 @@ export function isConfigured(): boolean {
 // ============================================
 // PER-TYPE LABEL CONFIG
 // ============================================
-export type LabelType = "product" | "lot" | "location" | "palette" | "blank";
+export type LabelType = "product" | "lot" | "location" | "palette" | "blank" | "picking";
 
 export interface LabelTypeConfig {
   printerId: number | null;
