@@ -1504,9 +1504,21 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
     try {
       // 1. Extract text from PDF client-side using pdfjs-dist
       const arrayBuffer = await file.arrayBuffer();
-      const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "";
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, useWorkerFetch: false, isEvalSupported: false, useSystemFonts: true }).promise;
+      // Load pdfjs from CDN (legacy build that works without worker issues)
+      const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174";
+      let pdfjsLib = (window as any).pdfjsLib;
+      if (!pdfjsLib) {
+        await new Promise<void>((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = `${PDFJS_CDN}/pdf.min.js`;
+          s.onload = () => resolve();
+          s.onerror = () => reject(new Error("Impossible de charger pdf.js"));
+          document.head.appendChild(s);
+        });
+        pdfjsLib = (window as any).pdfjsLib;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `${PDFJS_CDN}/pdf.worker.min.js`;
+      }
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       let fullText = "";
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
