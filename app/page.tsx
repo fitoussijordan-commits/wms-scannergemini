@@ -51,7 +51,8 @@ function requestPrint(req: PrintRequest) {
 }
 
 async function executePrint(req: PrintRequest, copies: number) {
-  const printerId = pn.getSavedPrinterId();
+  const cfg = pn.getLabelTypeConfig(req.type as pn.LabelType);
+  const printerId = cfg.printerId || pn.getSavedPrinterId();
   if (printerId) {
     if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
     if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
@@ -1076,11 +1077,23 @@ function Alert({ type, children }: { type: string; children: React.ReactNode }) 
 // ============================================
 function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToast: (msg: string) => void; session: any }) {
   const [tab, setTab] = useState<"blank" | "palette">("blank");
+  // Update printer/size when tab changes to reflect per-type settings
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
-  const [printerId, setPrinterId] = useState<number | null>(pn.getSavedPrinterId());
-  const [labelSize, setLabelSize] = useState<pn.LabelSize>(pn.getLabelSize());
+  // Use per-type config from settings (palette & blank have their own)
+  const getPrinterForTab = (t: "blank" | "palette") => {
+    const cfg = pn.getLabelTypeConfig(t);
+    return cfg.printerId || pn.getSavedPrinterId();
+  };
+  const getSizeForTab = (t: "blank" | "palette") => {
+    const cfg = pn.getLabelTypeConfig(t);
+    return cfg.labelSize;
+  };
+  const [printerId, setPrinterId] = useState<number | null>(() => getPrinterForTab("blank"));
+  const [labelSize, setLabelSize] = useState<pn.LabelSize>(() => getSizeForTab("blank"));
   const [qty, setQty] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024;
 
   // Blank label state
   const [blankLines, setBlankLines] = useState([{ text: "", fontSize: 26, align: "C" as "L"|"C"|"R" }]);
@@ -1436,13 +1449,136 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         )}
       </div>
 
-      {/* Print button */}
-      <button onClick={handlePrint} disabled={loading || !printerId}
-        style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", cursor: loading || !printerId ? "not-allowed" : "pointer",
-          background: loading || !printerId ? C.borderStrong : C.blue, color: "#fff",
-          fontSize: 15, fontWeight: 800, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-        {loading ? "Envoi en cours..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
-      </button>
+      {/* Preview modal — desktop only, palette tab only */}
+      {showPreview && tab === "palette" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 680, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 800, fontSize: 16, color: C.text }}>👁 Aperçu étiquette palette</div>
+              <button onClick={() => setShowPreview(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMuted }}>✕</button>
+            </div>
+            <div style={{ padding: 20 }}>
+              <PalettePreview pal={pal} />
+            </div>
+            <div style={{ padding: "14px 20px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
+              <button onClick={() => setShowPreview(false)}
+                style={{ flex: 1, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
+                Modifier
+              </button>
+              <button onClick={() => { setShowPreview(false); handlePrint(); }} disabled={loading}
+                style={{ flex: 2, padding: 12, background: C.blue, border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
+                {loading ? "Envoi..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print / Preview buttons */}
+      {tab === "palette" && isDesktop ? (
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => setShowPreview(true)}
+            style={{ flex: 1, padding: "14px", borderRadius: 12, border: `2px solid ${C.blue}`, cursor: "pointer",
+              background: C.white, color: C.blue, fontSize: 14, fontWeight: 800, fontFamily: "inherit" }}>
+            👁 Aperçu
+          </button>
+          <button onClick={handlePrint} disabled={loading || !printerId}
+            style={{ flex: 2, padding: "14px", borderRadius: 12, border: "none", cursor: loading || !printerId ? "not-allowed" : "pointer",
+              background: loading || !printerId ? C.borderStrong : C.blue, color: "#fff",
+              fontSize: 15, fontWeight: 800, fontFamily: "inherit" }}>
+            {loading ? "Envoi en cours..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
+          </button>
+        </div>
+      ) : (
+        <button onClick={handlePrint} disabled={loading || !printerId}
+          style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", cursor: loading || !printerId ? "not-allowed" : "pointer",
+            background: loading || !printerId ? C.borderStrong : C.blue, color: "#fff",
+            fontSize: 15, fontWeight: 800, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+          {loading ? "Envoi en cours..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// PALETTE LABEL PREVIEW (desktop only)
+// ============================================
+function PalettePreview({ pal }: { pal: any }) {
+  const refs = pal.refs || [];
+  const mainRef = refs[0] || {};
+  const totalWeight = refs.reduce((sum: number, r: any) => {
+    const w = parseFloat(r.weight) || 0; return sum + w;
+  }, 0);
+
+  return (
+    <div style={{
+      border: "2px solid #000", borderRadius: 4, fontFamily: "monospace",
+      width: "100%", maxWidth: 500, margin: "0 auto",
+      background: "#fff", fontSize: 12,
+    }}>
+      {/* Header: sender / recipient */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "2px solid #000" }}>
+        <div style={{ padding: "10px 12px", borderRight: "1px solid #000" }}>
+          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", color: "#666", marginBottom: 3 }}>Expéditeur</div>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{pal.senderName || "—"}</div>
+          {pal.senderAddress && <div style={{ fontSize: 11, color: "#444" }}>{pal.senderAddress}</div>}
+        </div>
+        <div style={{ padding: "10px 12px" }}>
+          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", color: "#666", marginBottom: 3 }}>Destinataire</div>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{pal.recipientName || "—"}</div>
+          {pal.recipientAddress && <div style={{ fontSize: 11, color: "#444" }}>{pal.recipientAddress}</div>}
+        </div>
+      </div>
+
+      {/* Refs */}
+      <div style={{ padding: "10px 12px", borderBottom: "2px solid #000" }}>
+        <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", color: "#666", marginBottom: 6 }}>Références produits</div>
+        {refs.map((r: any, i: number) => (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0", borderBottom: i < refs.length - 1 ? "1px dashed #ddd" : "none" }}>
+            <div>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>{r.productName || "—"}</span>
+              {r.ref && <span style={{ fontSize: 10, color: "#666", marginLeft: 6 }}>({r.ref})</span>}
+              {r.lotNumber && <span style={{ fontSize: 10, color: "#444", marginLeft: 6 }}>Lot: {r.lotNumber}</span>}
+            </div>
+            <div style={{ textAlign: "right" as const, fontSize: 11 }}>
+              <div style={{ fontWeight: 700 }}>{r.quantity} {r.unit}</div>
+              {r.expiryDate && <div style={{ color: "#666" }}>DLUO: {r.expiryDate}</div>}
+              {r.weight && <div style={{ color: "#444" }}>{r.weight}</div>}
+            </div>
+          </div>
+        ))}
+        {totalWeight > 0 && (
+          <div style={{ marginTop: 6, textAlign: "right" as const, fontWeight: 700, fontSize: 13 }}>
+            Poids total : {totalWeight.toFixed(2)} kg
+          </div>
+        )}
+      </div>
+
+      {/* Refs orders */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", borderBottom: "2px solid #000" }}>
+        <div style={{ padding: "8px 12px", borderRight: "1px solid #000" }}>
+          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", color: "#666", marginBottom: 2 }}>N° Commande</div>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{pal.orderRef || "—"}</div>
+        </div>
+        <div style={{ padding: "8px 12px" }}>
+          <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", color: "#666", marginBottom: 2 }}>N° BL</div>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>{pal.deliveryRef || "—"}</div>
+        </div>
+      </div>
+
+      {/* SSCC barcode mockup */}
+      <div style={{ padding: "12px", textAlign: "center" as const }}>
+        <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", color: "#666", marginBottom: 6 }}>Code SSCC (GS1-128)</div>
+        <div style={{
+          background: "#000", height: 48, borderRadius: 2, marginBottom: 4,
+          backgroundImage: "repeating-linear-gradient(90deg, #000 0px, #000 2px, #fff 2px, #fff 4px)",
+          opacity: pal.sscc ? 1 : 0.2,
+        }} />
+        <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.1em", fontWeight: 700 }}>
+          {pal.sscc ? `(00)${pal.sscc}` : "SSCC non renseigné"}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2362,68 +2498,67 @@ function HistoryScreen({ history, onClear, onBack }: { history: HistoryEntry[]; 
 // SETTINGS SCREEN
 // ============================================
 function SettingsScreen({ onBack }: { onBack: () => void }) {
-  // Printer
-  const [printerId, setPrinterId] = useState(() => { const s = pn.getSavedPrinterId(); return s ? String(s) : ""; });
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
   const [msg, setMsg] = useState("");
+  const [hasKey, setHasKey] = useState(true);
 
-  // Label size
-  const [labelSize, setLabelSize] = useState<pn.LabelSize>(() => pn.getLabelSize());
+  // Per-type config state
+  type LabelType = pn.LabelType;
+  const LABEL_TYPES: { key: LabelType; label: string; icon: string; hasSize: boolean }[] = [
+    { key: "product", label: "Étiquette produit", icon: "📦", hasSize: true },
+    { key: "lot", label: "Étiquette lot", icon: "🏷️", hasSize: true },
+    { key: "location", label: "Étiquette emplacement", icon: "📍", hasSize: true },
+    { key: "palette", label: "Étiquette palette", icon: "🏭", hasSize: true },
+    { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
+  ];
 
-  const [hasKey, setHasKey] = useState(true); // assume configured, check on load
+  const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
+  const [openType, setOpenType] = useState<LabelType | null>(null);
+
+  const SIZES = [
+    { label: "50×30", w: 50, h: 30 }, { label: "70×45", w: 70, h: 45 },
+    { label: "100×70", w: 100, h: 70 }, { label: "100×150", w: 100, h: 150 },
+  ];
 
   const fetchPrinters = async () => {
     setLoadingP(true); setMsg("");
     try {
       const list = await pn.listPrinters();
-      setPrinters(list);
-      setHasKey(true);
+      setPrinters(list); setHasKey(true);
       if (!list.length) setMsg("Aucune imprimante trouvée");
     } catch (e: any) {
-      if (e.message?.includes("non configurée") || e.message?.includes("500")) {
-        setHasKey(false);
-      }
+      if (e.message?.includes("non configurée") || e.message?.includes("500")) setHasKey(false);
       setMsg("Erreur: " + e.message);
     }
     setLoadingP(false);
   };
 
-  const savePrinter = () => {
-    const id = parseInt(printerId, 10);
-    if (id > 0) { pn.savePrinterId(id); setMsg("✓ Imprimante sauvegardée"); }
-    else setMsg("ID invalide");
+  const updateTypeConfig = (type: LabelType, patch: Partial<pn.LabelTypeConfig>) => {
+    const updated = { ...configs[type], ...patch };
+    pn.saveLabelTypeConfig(type, patch);
+    setConfigs(prev => ({ ...prev, [type]: updated }));
+    setMsg("✓ Sauvegardé");
+    setTimeout(() => setMsg(""), 2000);
   };
 
-  const saveSize = () => {
-    if (labelSize.widthMM > 0 && labelSize.heightMM > 0) {
-      pn.saveLabelSize(labelSize);
-      setMsg("✓ Taille sauvegardée");
-    }
+  const testPrint = async (type: LabelType) => {
+    const cfg = configs[type];
+    if (!cfg.printerId) { setMsg("⚠️ Configure une imprimante pour ce type"); return; }
+    setMsg("Envoi test...");
+    let r: any;
+    if (type === "product") r = await pn.printProductLabel(cfg.printerId, "TEST PRODUIT", "3401234567890");
+    else if (type === "lot") r = await pn.printLotLabel(cfg.printerId, "LOT-001", "Produit Test", "LOT-001");
+    else if (type === "location") r = await pn.printLocationLabel(cfg.printerId, "A42-RKD1", "B-A42");
+    else if (type === "palette") r = await pn.printPaletteLabel(cfg.printerId, { senderName: "TEST", recipientName: "DEST", refs: [{ productName: "Produit Test", ref: "REF001", lotNumber: "LOT001", quantity: 10, unit: "cartons", expiryDate: "", unitsPerCarton: "", unitWeight: "", weight: "50 kg" }], sscc: "000123456789012340", orderRef: "CMD-TEST", deliveryRef: "BL-TEST" });
+    else r = await pn.printBlankLabel(cfg.printerId, { lines: [{ text: "TEST VIERGE", fontSize: 30, align: "C" }] });
+    setMsg(r?.success ? "✓ Test envoyé" : "✕ " + r?.error);
   };
 
-  const testProduct = async () => {
-    const id = parseInt(printerId, 10);
-    if (!id) { setMsg("Configure une imprimante d'abord"); return; }
-    setMsg("Envoi test produit...");
-    const r = await pn.printProductLabel(id, "TEST PRODUIT", "3401234567890");
-    setMsg(r.success ? "✓ Étiquette produit envoyée" : "✕ " + r.error);
-  };
-
-  const testLot = async () => {
-    const id = parseInt(printerId, 10);
-    if (!id) { setMsg("Configure une imprimante d'abord"); return; }
-    setMsg("Envoi test lot...");
-    const r = await pn.printLotLabel(id, "A12345-01/2026", "Crème Purifiante 50ml", "A12345-01/2026");
-    setMsg(r.success ? "✓ Étiquette lot envoyée" : "✕ " + r.error);
-  };
-
-  const testLocation = async () => {
-    const id = parseInt(printerId, 10);
-    if (!id) { setMsg("Configure une imprimante d'abord"); return; }
-    setMsg("Envoi test emplacement...");
-    const r = await pn.printLocationLabel(id, "A42-RKD1", "B-A42");
-    setMsg(r.success ? "✓ Étiquette emplacement envoyée" : "✕ " + r.error);
+  const printerName = (id: number | null) => {
+    if (!id) return "Non configurée";
+    const p = printers.find(p => p.id === id);
+    return p ? p.name : `#${id}`;
   };
 
   return (
@@ -2435,106 +2570,130 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
         <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Paramètres</h2>
       </div>
 
-      {/* LABEL SIZE */}
-      <Section>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-          📐 Taille des étiquettes
-        </div>
-        <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 4 }}>Largeur (mm)</label>
-            <input type="number" style={inputStyle} value={labelSize.widthMM}
-              onChange={e => setLabelSize(s => ({ ...s, widthMM: parseInt(e.target.value) || 0 }))}
-              onKeyDown={e => e.stopPropagation()} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 4 }}>Hauteur (mm)</label>
-            <input type="number" style={inputStyle} value={labelSize.heightMM}
-              onChange={e => setLabelSize(s => ({ ...s, heightMM: parseInt(e.target.value) || 0 }))}
-              onKeyDown={e => e.stopPropagation()} />
-          </div>
-        </div>
-        <button onClick={saveSize} style={{ width: "100%", padding: 10, background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-          Sauvegarder la taille
-        </button>
-        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6, textAlign: "center" }}>
-          Tailles courantes : 50×30, 57×32, 70×45, 100×50
-        </div>
-      </Section>
-
-      {/* PRINTER */}
-      {hasKey ? (
+      {/* Load printers */}
+      {hasKey && (
         <Section>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-            🖨 Imprimante PrintNode
-          </div>
-
-          {/* Manual ID */}
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.textSec, display: "block", marginBottom: 4 }}>ID Imprimante</label>
-            <div style={{ display: "flex", gap: 6 }}>
-              <input type="number" style={{ ...inputStyle, flex: 1 }} value={printerId}
-                onChange={e => setPrinterId(e.target.value)}
-                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") savePrinter(); }}
-                placeholder="Ex: 70123456" />
-              <button onClick={savePrinter} style={{ padding: "0 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 10, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>OK</button>
-            </div>
-          </div>
-
-          {/* List printers */}
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>🖨 Imprimantes disponibles</div>
           <button onClick={fetchPrinters} disabled={loadingP}
-            style={{ width: "100%", padding: 10, background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", marginBottom: 10 }}>
-            {loadingP ? "Chargement..." : "Rechercher les imprimantes"}
+            style={{ width: "100%", padding: 10, background: C.bg, color: C.textSec, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            {loadingP ? "Chargement..." : printers.length > 0 ? `${printers.length} imprimante(s) trouvée(s) — Actualiser` : "Rechercher les imprimantes"}
           </button>
-
           {printers.length > 0 && (
-            <div style={{ marginBottom: 12 }}>
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap" as const, gap: 4 }}>
               {printers.map(p => (
-                <button key={p.id}
-                  onClick={() => { setPrinterId(String(p.id)); pn.savePrinterId(p.id); setMsg(`✓ ${p.name} sélectionnée`); }}
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "10px 12px", marginBottom: 4,
-                    background: String(p.id) === printerId ? C.blueSoft : C.bg,
-                    border: `1.5px solid ${String(p.id) === printerId ? C.blue : C.border}`,
-                    borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 12, textAlign: "left",
-                  }}>
-                  <div>
-                    <div style={{ fontWeight: 600, color: C.text }}>{p.name}</div>
-                    <div style={{ fontSize: 10, color: C.textMuted }}>{p.computer.name} · #{p.id}</div>
-                  </div>
-                  <span style={{ fontSize: 9, fontWeight: 600,
-                    color: p.state === "online" ? C.green : C.orange,
-                    background: p.state === "online" ? C.greenSoft : C.orangeSoft,
-                    padding: "2px 6px", borderRadius: 4
-                  }}>{p.state}</span>
-                </button>
+                <div key={p.id} style={{ fontSize: 11, padding: "3px 8px", borderRadius: 12, background: p.state === "online" ? C.greenSoft : C.orangeSoft, color: p.state === "online" ? C.green : C.orange, fontWeight: 600 }}>
+                  {p.name} #{p.id}
+                </div>
               ))}
             </div>
           )}
-
-          {/* Test prints */}
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 8 }}>Impressions test</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-            <button onClick={testProduct} style={testBtnStyle}>Produit</button>
-            <button onClick={testLot} style={testBtnStyle}>Lot</button>
-            <button onClick={testLocation} style={testBtnStyle}>Emplacement</button>
-          </div>
-        </Section>
-      ) : (
-        <Section>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🖨 Imprimante</div>
-          <Alert type="info">Ajoute PRINTNODE_API_KEY dans les variables d'environnement Vercel pour activer PrintNode.</Alert>
         </Section>
       )}
 
+      {!hasKey && (
+        <Section>
+          <Alert type="info">Ajoute PRINTNODE_API_KEY dans les variables Vercel pour activer PrintNode.</Alert>
+        </Section>
+      )}
+
+      {/* Per-type configs */}
+      <Section>
+        <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 12 }}>⚙️ Configuration par type d'étiquette</div>
+        {LABEL_TYPES.map(({ key, label, icon }) => {
+          const cfg = configs[key];
+          const isOpen = openType === key;
+          return (
+            <div key={key} style={{ marginBottom: 8, border: `1.5px solid ${isOpen ? C.blue : C.border}`, borderRadius: 10, overflow: "hidden" }}>
+              {/* Header row */}
+              <button onClick={() => setOpenType(isOpen ? null : key)}
+                style={{ width: "100%", padding: "11px 14px", background: isOpen ? C.blueSoft : C.white, border: "none", cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 16 }}>{icon}</span>
+                  <div style={{ textAlign: "left" as const }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{label}</div>
+                    <div style={{ fontSize: 10, color: C.textMuted }}>
+                      {printerName(cfg.printerId)} · {cfg.labelSize.widthMM}×{cfg.labelSize.heightMM}mm
+                    </div>
+                  </div>
+                </div>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.textMuted} strokeWidth="2">
+                  {isOpen ? <polyline points="18 15 12 9 6 15"/> : <polyline points="6 9 12 15 18 9"/>}
+                </svg>
+              </button>
+
+              {/* Expanded config */}
+              {isOpen && (
+                <div style={{ padding: "12px 14px", background: C.white, borderTop: `1px solid ${C.border}` }}>
+                  {/* Printer selector */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>Imprimante</div>
+                    {printers.length > 0 ? (
+                      <select value={cfg.printerId ?? ""} onChange={e => updateTypeConfig(key, { printerId: Number(e.target.value) || null })}
+                        style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", background: C.white }}>
+                        <option value="">-- Aucune --</option>
+                        {printers.map(p => <option key={p.id} value={p.id}>{p.name} (#{p.id})</option>)}
+                      </select>
+                    ) : (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input type="number" value={cfg.printerId ?? ""} placeholder="ID imprimante"
+                          onChange={e => updateTypeConfig(key, { printerId: Number(e.target.value) || null })}
+                          onKeyDown={e => e.stopPropagation()}
+                          style={{ flex: 1, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit" }} />
+                        <div style={{ fontSize: 10, color: C.textMuted, alignSelf: "center" }}>Recherche les imprimantes d'abord</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Size */}
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 5 }}>Format étiquette</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const, marginBottom: 6 }}>
+                      {SIZES.map(s => (
+                        <button key={s.label} onClick={() => updateTypeConfig(key, { labelSize: { widthMM: s.w, heightMM: s.h } })}
+                          style={{ padding: "5px 10px", borderRadius: 6, border: `1.5px solid ${cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blue : C.border}`,
+                            background: cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blueSoft : C.white,
+                            color: cfg.labelSize.widthMM === s.w && cfg.labelSize.heightMM === s.h ? C.blue : C.text,
+                            fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input type="number" value={cfg.labelSize.widthMM}
+                        onChange={e => updateTypeConfig(key, { labelSize: { ...cfg.labelSize, widthMM: Number(e.target.value) } })}
+                        onKeyDown={e => e.stopPropagation()}
+                        style={{ width: 60, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center" as const, fontFamily: "inherit" }} />
+                      <span style={{ color: C.textMuted, fontSize: 12 }}>×</span>
+                      <input type="number" value={cfg.labelSize.heightMM}
+                        onChange={e => updateTypeConfig(key, { labelSize: { ...cfg.labelSize, heightMM: Number(e.target.value) } })}
+                        onKeyDown={e => e.stopPropagation()}
+                        style={{ width: 60, padding: "6px 8px", border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, textAlign: "center" as const, fontFamily: "inherit" }} />
+                      <span style={{ color: C.textMuted, fontSize: 11 }}>mm</span>
+                    </div>
+                  </div>
+
+                  {/* Test button */}
+                  {hasKey && cfg.printerId && (
+                    <button onClick={() => testPrint(key)}
+                      style={{ padding: "7px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
+                      🖨 Imprimer test
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </Section>
+
       {msg && (
         <div style={{ textAlign: "center", fontSize: 13, fontWeight: 600, padding: 12,
-          color: msg.startsWith("✓") ? C.green : msg.startsWith("✕") ? C.red : C.textSec,
+          color: msg.startsWith("✓") ? C.green : msg.startsWith("✕") || msg.startsWith("⚠") ? C.red : C.textSec,
         }}>{msg}</div>
       )}
     </>
   );
 }
-
 // ============================================
 // PREPARATION LIST SCREEN
 // ============================================

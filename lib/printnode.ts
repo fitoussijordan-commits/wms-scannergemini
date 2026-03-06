@@ -471,3 +471,37 @@ export function savePrinterId(id: number) {
 export function isConfigured(): boolean {
   return !!getSavedPrinterId();
 }
+
+// ============================================
+// PER-TYPE LABEL CONFIG
+// ============================================
+export type LabelType = "product" | "lot" | "location" | "palette" | "blank";
+
+export interface LabelTypeConfig {
+  printerId: number | null;
+  labelSize: LabelSize;
+}
+
+const TYPE_CONFIG_KEY = "wms_label_type_config";
+
+export function getLabelTypeConfig(type: LabelType): LabelTypeConfig {
+  try {
+    const all = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}");
+    return all[type] || { printerId: getSavedPrinterId(), labelSize: getLabelSize() };
+  } catch { return { printerId: getSavedPrinterId(), labelSize: getLabelSize() }; }
+}
+
+export function saveLabelTypeConfig(type: LabelType, config: Partial<LabelTypeConfig>) {
+  try {
+    const all = JSON.parse(localStorage.getItem(TYPE_CONFIG_KEY) || "{}");
+    all[type] = { ...getLabelTypeConfig(type), ...config };
+    localStorage.setItem(TYPE_CONFIG_KEY, JSON.stringify(all));
+  } catch {}
+}
+
+export function getAllLabelTypeConfigs(): Record<LabelType, LabelTypeConfig> {
+  const types: LabelType[] = ["product", "lot", "location", "palette", "blank"];
+  const result = {} as Record<LabelType, LabelTypeConfig>;
+  for (const t of types) result[t] = getLabelTypeConfig(t);
+  return result;
+}
