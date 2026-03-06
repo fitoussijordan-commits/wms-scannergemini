@@ -1793,6 +1793,11 @@ function ProductResult({ product, stock, onRename }: { product: any; stock: any[
               ) : (
                 <>
                   <span style={{ fontWeight: 600, color: C.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.location_id[1]}</span>
+                  <button onClick={() => requestPrint({ type: "location", title: q.location_id[1], barcode: q.location_id[1], locationName: q.location_id[1] })}
+                    style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", flexShrink: 0, display: "inline-flex" }}
+                    title="Imprimer étiquette emplacement">
+                    {printerSmallIcon}
+                  </button>
                   {onRename && (
                     <button onClick={() => { setEditingLocId(q.location_id[0]); setEditLocName(q.location_id[1].split("/").pop() || ""); }}
                       style={{ background: "none", border: "none", padding: 0, cursor: "pointer", flexShrink: 0, display: "inline-flex" }}
@@ -1847,8 +1852,15 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
         <StatBox value={tQ} label="STOCK" color={C.textSec} />
       </div>
       {stock.map((q, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
-          <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ fontWeight: 600 }}>{q.location_id[1]}</span>
+            <button onClick={() => requestPrint({ type: "location", title: q.location_id[1], barcode: q.location_id[1], locationName: q.location_id[1] })}
+              style={{ background: "none", border: "none", padding: "0 2px", cursor: "pointer", display: "inline-flex" }}
+              title="Imprimer étiquette emplacement">
+              {printerSmallIcon}
+            </button>
+          </div>
           <span style={{ fontWeight: 700, color: C.green }}>{q.quantity - (q.reserved_quantity||0)}</span>
         </div>
       ))}
