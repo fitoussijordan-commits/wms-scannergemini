@@ -375,12 +375,6 @@ export function generatePaletteZPL(data: PaletteLabelData): string {
 
   let y = 10;
 
-  // ── NUMÉRO PALETTE (gros, coin haut droite) ──
-  if (data.paletteNumber !== undefined) {
-    const pNum = "P" + data.paletteNumber;
-    lines.push(`^FO${W - 120},5^A0N,90,90^FD${pNum}^FS`);
-  }
-
   // ── EXPÉDITEUR ──
   lines.push(`^FO10,${y}^A0N,18,18^FDExpediteur^FS`);
   y += 20;
