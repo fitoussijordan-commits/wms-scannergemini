@@ -1440,10 +1440,10 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
             recipientAddress: chain.recipientAddress, refs, sscc, unit: chain.unit,
             orderRef: chain.orderRef,
           };
-          const palTemplate = pn.paletteDataToTemplate(palData, ok + 1);
-          const pdfB64 = await generateLabelPDF(palTemplate);
-          console.log("[chain] sending palette", ok + 1, "printer:", chainPrinter, "pdf size:", pdfB64.length, "label size:", palTemplate.widthMM + "x" + palTemplate.heightMM + "mm");
-          const r = await pn.printPdfLabel(chainPrinter, pdfB64, `Palette ${ok + 1} → ${chain.recipientName}`, 1);
+          // Add palette number to refs display via productName hack
+          const palDataWithNum = { ...palData, paletteNumber: ok + 1 };
+          console.log("[chain] sending palette", ok + 1, "printer:", chainPrinter, "via ZPL");
+          const r = await pn.printPaletteLabel(chainPrinter, palDataWithNum, 1);
           console.log("[chain] result palette", ok + 1, r);
           if (r.success) ok++; else { onToast("❌ Palette " + (ok + 1) + ": " + (r.error || "erreur")); break; }
           await new Promise(res => setTimeout(res, 800)); // zebra needs time between jobs
@@ -1480,9 +1480,8 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
           weight: pal.refs.find((r: any) => r.weight)?.weight,
           orderRef: pal.orderRef, deliveryRef: pal.deliveryRef,
         };
-        const palTemplate = pn.paletteDataToTemplate(palData);
-        const pdfB64 = await generateLabelPDF(palTemplate);
-        result = await pn.printPdfLabel(printerId, pdfB64, `Palette → ${pal.recipientName || "Destinataire"}`, qty);
+        // Use ZPL → Labelary → PDF (reliable path for Zebra)
+        result = await pn.printPaletteLabel(printerId, palData, qty);
       }
       if (result.success) onToast("✅ Impression envoyée");
       else onToast("❌ " + (result.error || "Erreur impression"));
