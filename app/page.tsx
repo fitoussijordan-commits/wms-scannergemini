@@ -1319,21 +1319,15 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     lines: [{ ref: "", qty: "", lot: "" }] as { ref: string; qty: string; lot: string }[],
   });
   type ChainState = { recipientName: string; recipientAddress: string; senderName: string; unit: string; orderRef: string; palettes: { id: string; lines: { ref: string; qty: string; lot: string }[] }[]; _savedAt?: number };
-  const defaultChain: ChainState = { recipientName: "", recipientAddress: "", senderName: "", unit: "cartons", orderRef: "", palettes: [emptyChainPalette()] };
-  const [chain, setChain] = useState<ChainState>(() => {
+  const [chain, setChain] = useState<ChainState>({
+    recipientName: "", recipientAddress: "", senderName: "", unit: "cartons", orderRef: "", palettes: [emptyChainPalette()],
+  });
+  useEffect(() => {
     try {
       const saved = localStorage.getItem("wms_last_chain");
-      if (saved) return JSON.parse(saved) as ChainState;
+      if (saved) setChain(JSON.parse(saved) as ChainState);
     } catch {}
-    return {
-      recipientName: "",
-      recipientAddress: "",
-      senderName: "",
-      unit: "cartons",
-    orderRef: "",
-    palettes: [emptyChainPalette()],
-    };
-  });
+  }, []);
 
   const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024;
 
@@ -1448,7 +1442,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
           };
           const palTemplate = pn.paletteDataToTemplate(palData, ok + 1);
           const pdfB64 = await generateLabelPDF(palTemplate);
-          console.log("[chain] sending palette", ok + 1, "printer:", chainPrinter, "pdf size:", pdfB64.length);
+          console.log("[chain] sending palette", ok + 1, "printer:", chainPrinter, "pdf size:", pdfB64.length, "label size:", palTemplate.widthMM + "x" + palTemplate.heightMM + "mm");
           const r = await pn.printPdfLabel(chainPrinter, pdfB64, `Palette ${ok + 1} → ${chain.recipientName}`, 1);
           console.log("[chain] result palette", ok + 1, r);
           if (r.success) ok++; else { onToast("❌ Palette " + (ok + 1) + ": " + (r.error || "erreur")); break; }
