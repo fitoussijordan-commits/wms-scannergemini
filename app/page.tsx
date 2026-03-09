@@ -1122,6 +1122,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   const [qty, setQty] = useState(1);
   const [loading, setLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [showChainPreview, setShowChainPreview] = useState(false);
   // ── CHAIN (impression palette en chaîne) ──
   const emptyChainPalette = () => ({
     id: Math.random().toString(36).slice(2, 8),
@@ -1517,62 +1518,70 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         {tab === "chain" && (
           <div>
             {/* Destinataire commun */}
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Destinataire (commun à toutes les palettes)</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Destinataire commun</div>
             <input value={chain.recipientName} onChange={e => setChain({ ...chain, recipientName: e.target.value })}
               placeholder="Nom destinataire"
               style={{ width: "100%", padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box" as const }} />
             <input value={chain.recipientAddress} onChange={e => setChain({ ...chain, recipientAddress: e.target.value })}
               placeholder="Adresse (optionnel)"
               style={{ width: "100%", padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box" as const }} />
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
               <input value={chain.senderName} onChange={e => setChain({ ...chain, senderName: e.target.value })}
                 placeholder="Expéditeur"
-                style={{ flex: 1, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                style={{ flex: 1, minWidth: 0, padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
               <input value={chain.unit} onChange={e => setChain({ ...chain, unit: e.target.value })}
                 placeholder="Unité"
-                style={{ width: 90, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                style={{ width: 80, padding: "8px 8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
               <input value={chain.orderRef} onChange={e => setChain({ ...chain, orderRef: e.target.value })}
                 placeholder="N° CDE"
-                style={{ width: 110, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                style={{ width: 90, padding: "8px 8px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
             </div>
 
             {/* Palettes */}
             {chain.palettes.map((pal2, pi) => (
-              <div key={pal2.id} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pi + 1}</div>
+              <div key={pal2.id} style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+                {/* Header palette avec grand numéro */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: C.white, borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, background: C.blue, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 900 }}>
+                      P{pi + 1}
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pi + 1}</div>
+                  </div>
                   {chain.palettes.length > 1 && (
                     <button onClick={() => setChain({ ...chain, palettes: chain.palettes.filter((_, j) => j !== pi) })}
                       style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>Supprimer</button>
                   )}
                 </div>
                 {/* Lignes ref */}
-                {pal2.lines.map((line, li) => (
-                  <div key={li} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
-                    <input value={line.ref} onChange={e => {
-                      const ps = [...chain.palettes]; ps[pi].lines[li].ref = e.target.value; setChain({ ...chain, palettes: ps });
-                    }} placeholder="Réf / Désignation"
-                      style={{ flex: 2, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit" }} />
-                    <input value={line.lot} onChange={e => {
-                      const ps = [...chain.palettes]; ps[pi].lines[li].lot = e.target.value; setChain({ ...chain, palettes: ps });
-                    }} placeholder="Lot"
-                      style={{ flex: 1, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit" }} />
-                    <input value={line.qty} onChange={e => {
-                      const ps = [...chain.palettes]; ps[pi].lines[li].qty = e.target.value; setChain({ ...chain, palettes: ps });
-                    }} placeholder="Qté"
-                      style={{ width: 60, padding: "7px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", textAlign: "center" as const }} />
-                    {pal2.lines.length > 1 && (
-                      <button onClick={() => {
-                        const ps = [...chain.palettes]; ps[pi].lines = ps[pi].lines.filter((_, j) => j !== li); setChain({ ...chain, palettes: ps });
-                      }} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 16, lineHeight: 1 }}>✕</button>
-                    )}
-                  </div>
-                ))}
-                <button onClick={() => {
-                  const ps = [...chain.palettes]; ps[pi].lines.push({ ref: "", qty: "", lot: "" }); setChain({ ...chain, palettes: ps });
-                }} style={{ width: "100%", padding: "5px", border: `1px dashed ${C.border}`, borderRadius: 6, background: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
-                  + Ligne
-                </button>
+                <div style={{ padding: "8px 10px" }}>
+                  {pal2.lines.map((line, li) => (
+                    <div key={li} style={{ display: "flex", gap: 5, marginBottom: 5, alignItems: "center" }}>
+                      <input value={line.ref} onChange={e => {
+                        const ps = [...chain.palettes]; ps[pi].lines[li].ref = e.target.value; setChain({ ...chain, palettes: ps });
+                      }} placeholder="Réf / Désignation"
+                        style={{ flex: 2, minWidth: 0, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                      <input value={line.lot} onChange={e => {
+                        const ps = [...chain.palettes]; ps[pi].lines[li].lot = e.target.value; setChain({ ...chain, palettes: ps });
+                      }} placeholder="Lot"
+                        style={{ flex: 1, minWidth: 0, padding: "7px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+                      <input value={line.qty} onChange={e => {
+                        const ps = [...chain.palettes]; ps[pi].lines[li].qty = e.target.value; setChain({ ...chain, palettes: ps });
+                      }} placeholder="Qté"
+                        style={{ width: 52, padding: "7px 4px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", textAlign: "center" as const, boxSizing: "border-box" as const }} />
+                      {pal2.lines.length > 1 && (
+                        <button onClick={() => {
+                          const ps = [...chain.palettes]; ps[pi].lines = ps[pi].lines.filter((_, j) => j !== li); setChain({ ...chain, palettes: ps });
+                        }} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>✕</button>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={() => {
+                    const ps = [...chain.palettes]; ps[pi].lines.push({ ref: "", qty: "", lot: "" }); setChain({ ...chain, palettes: ps });
+                  }} style={{ width: "100%", padding: "5px", border: `1px dashed ${C.border}`, borderRadius: 6, background: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+                    + Ligne
+                  </button>
+                </div>
               </div>
             ))}
 
@@ -1582,6 +1591,46 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
             </button>
           </div>
         )}
+
+
+      {/* Preview modal — chain tab, desktop only */}
+      {showChainPreview && tab === "chain" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 900, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
+            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontWeight: 800, fontSize: 16, color: C.text }}>👁 Aperçu — {chain.palettes.length} palette(s)</div>
+              <button onClick={() => setShowChainPreview(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMuted }}>✕</button>
+            </div>
+            <div style={{ padding: 20, display: "flex", gap: 16, flexWrap: "wrap" as const }}>
+              {chain.palettes.filter(p => p.lines.some(l => l.ref.trim())).map((p, pi) => {
+                const sscc = "0" + "7383773" + String(Date.now() + pi).slice(-9) + "0";
+                const palData: pn.PaletteLabelData = {
+                  senderName: chain.senderName, recipientName: chain.recipientName,
+                  recipientAddress: chain.recipientAddress,
+                  refs: p.lines.filter(l => l.ref.trim()).map(l => ({ ref: l.ref, lot: l.lot, qty: l.qty ? Number(l.qty) : undefined })),
+                  sscc, unit: chain.unit, orderRef: chain.orderRef,
+                };
+                return (
+                  <div key={p.id} style={{ flex: "0 0 auto" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, marginBottom: 6, textAlign: "center" as const }}>P{pi + 1}</div>
+                    <PalettePreview pal={palData} />
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ padding: "14px 20px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 10 }}>
+              <button onClick={() => setShowChainPreview(false)}
+                style={{ flex: 1, padding: 12, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", color: C.textSec }}>
+                Modifier
+              </button>
+              <button onClick={() => { setShowChainPreview(false); handlePrint(); }} disabled={loading}
+                style={{ flex: 2, padding: 12, background: C.blue, border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
+                {loading ? "Envoi..." : "🖨️ Imprimer " + chain.palettes.length + " palette(s)"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Preview modal — desktop only, palette tab only */}
       {showPreview && tab === "palette" && (
@@ -1609,9 +1658,9 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       )}
 
       {/* Print / Preview buttons */}
-      {tab === "palette" && isDesktop ? (
+      {(tab === "palette" || tab === "chain") && isDesktop ? (
         <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={() => setShowPreview(true)}
+          <button onClick={() => tab === "chain" ? setShowChainPreview(true) : setShowPreview(true)}
             style={{ flex: 1, padding: "14px", borderRadius: 12, border: `2px solid ${C.blue}`, cursor: "pointer",
               background: C.white, color: C.blue, fontSize: 14, fontWeight: 800, fontFamily: "inherit" }}>
             👁 Aperçu
