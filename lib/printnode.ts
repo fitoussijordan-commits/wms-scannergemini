@@ -45,10 +45,8 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 // PRINT JOB (via server proxy)
 // ============================================
-async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1, usePdf: boolean = false, labelWidthMM?: number, labelHeightMM?: number): Promise<number> {
+async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
-  // btoa fails on chars > 127 (latin-1 bytes from zplSafe) — use escape trick
-  const encoded = btoa(unescape(encodeURIComponent(fullZpl)));
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -56,9 +54,31 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       action: "print",
       printerId,
       title,
-      content: encoded,
+      content: btoa(fullZpl),
       source: "WMS Scanner",
-      usePdf,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Erreur impression ${res.status}`);
+  }
+  const data = await res.json();
+  return data.jobId;
+}
+
+// Palette labels go via Labelary (ZPL→PDF) because Zebra thermal
+// handles PDF better for complex layouts
+async function submitPaletteJob(printerId: number, title: string, zpl: string, labelWidthMM: number, labelHeightMM: number): Promise<number> {
+  const res = await fetch("/api/printnode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "print",
+      printerId,
+      title,
+      content: btoa(unescape(encodeURIComponent(zpl))),
+      source: "WMS Scanner",
+      usePdf: true,
       labelWidthMM,
       labelHeightMM,
     }),
@@ -75,7 +95,6 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
 // PDF PRINT (base64 PDF direct to PrintNode)
 // ============================================
 async function submitPdfJob(printerId: number, title: string, pdfBase64: string, qty: number = 1): Promise<number> {
-  // Repeat PDF for multiple copies by sending qty in the job
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -568,16 +587,9 @@ export async function printPaletteLabel(
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
     const zpl = generatePaletteZPL(data);
-    // Always use 100x150mm for palette labels
-    const W = 100, H = 150;
-    console.log("[printPaletteLabel] zpl length:", zpl.length, "printer:", printerId, "size:", W+"x"+H);
-    console.log("[printPaletteLabel] ZPL preview:", zpl.substring(0, 200));
-    const jobId = await submitPrintJob(printerId, `Palette: ${data.recipientName || "dest"}`, zpl, qty, true, W, H);
+    const jobId = await submitPaletteJob(printerId, `Palette: ${data.recipientName || "dest"}`, zpl, 100, 150);
     return { success: true, jobId };
-  } catch (e: any) {
-    console.error("[printPaletteLabel] error:", e.message);
-    return { success: false, error: e.message };
-  }
+  } catch (e: any) { return { success: false, error: e.message }; }
 }
 
 export async function printBlankLabel(

@@ -16,60 +16,37 @@ function pnHeaders() {
   };
 }
 
-/**
- * Convert ZPL to PDF via Labelary API
- * widthIn / heightIn in inches (e.g. 100mm = 3.937in, 150mm = 5.906in)
- */
 async function zplToPdfBase64(zpl: string, widthMM: number = 100, heightMM: number = 150): Promise<string> {
   const widthIn = (widthMM / 25.4).toFixed(3);
   const heightIn = (heightMM / 25.4).toFixed(3);
-  // Labelary: 8dpmm = 203dpi, 12dpmm = 300dpi
-  const dpmm = "8dpmm";
-  const url = `https://api.labelary.com/v1/printers/${dpmm}/labels/${widthIn}x${heightIn}/0/`;
-
+  const url = `https://api.labelary.com/v1/printers/8dpmm/labels/${widthIn}x${heightIn}/0/`;
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Accept": "application/pdf",
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/pdf" },
     body: zpl,
   });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Labelary error ${res.status}: ${errText}`);
-  }
-
-  const arrayBuffer = await res.arrayBuffer();
-  const pdfBytes = Buffer.from(arrayBuffer);
+  if (!res.ok) throw new Error(`Labelary error ${res.status}: ${await res.text()}`);
+  const pdfBytes = Buffer.from(await res.arrayBuffer());
   return pdfBytes.toString("base64");
 }
 
 export async function GET(req: NextRequest) {
   const apiKey = getApiKey();
   if (!apiKey) return NextResponse.json({ error: "PRINTNODE_API_KEY non configurée" }, { status: 500 });
-
-  const { searchParams } = new URL(req.url);
-  const action = searchParams.get("action");
-
+  const action = new URL(req.url).searchParams.get("action");
   try {
     if (action === "printers") {
       const res = await fetch(`${API_URL}/printers`, { headers: pnHeaders() });
       if (!res.ok) return NextResponse.json({ error: `PrintNode ${res.status}` }, { status: res.status });
-      const data = await res.json();
-      return NextResponse.json(data);
+      return NextResponse.json(await res.json());
     }
     return NextResponse.json({ error: "Action inconnue" }, { status: 400 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  } catch (e: any) { return NextResponse.json({ error: e.message }, { status: 500 }); }
 }
 
 export async function POST(req: NextRequest) {
   const apiKey = getApiKey();
   if (!apiKey) return NextResponse.json({ error: "PRINTNODE_API_KEY non configurée" }, { status: 500 });
-
   try {
     const body = await req.json();
     const { action } = body;
@@ -81,17 +58,13 @@ export async function POST(req: NextRequest) {
       let contentType = "raw_base64";
 
       if (reqContentType === "pdf_base64") {
-        // Direct PDF from client (jsPDF) — no conversion needed
         finalContent = content;
         contentType = "pdf_base64";
       } else if (usePdf) {
-        // ZPL → PDF via Labelary (legacy palette path)
-        const zpl = Buffer.from(content, "base64").toString("latin1");
-        try {
-          finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
-        } catch (labelaryErr: any) {
-          return NextResponse.json({ error: "Labelary: " + labelaryErr.message }, { status: 500 });
-        }
+        // Palette path: ZPL → PDF via Labelary
+        // content is base64(encodeURIComponent(zpl)) — decode as utf-8
+        const zpl = Buffer.from(content, "base64").toString("utf-8");
+        finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
         contentType = "pdf_base64";
       }
 
@@ -99,11 +72,10 @@ export async function POST(req: NextRequest) {
         method: "POST",
         headers: pnHeaders(),
         body: JSON.stringify({
-          printerId,
-          title,
-          contentType,
+          printerId, title, contentType,
           content: finalContent,
           source: source || "WMS Scanner",
+          ...(contentType === "pdf_base64" && qty && qty > 1 ? { qty } : {}),
         }),
       });
 
@@ -111,13 +83,10 @@ export async function POST(req: NextRequest) {
         const errText = await res.text();
         return NextResponse.json({ error: `PrintNode: ${errText}` }, { status: res.status });
       }
-
       const jobId = await res.json();
       return NextResponse.json({ jobId });
     }
 
     return NextResponse.json({ error: "Action inconnue" }, { status: 400 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
-  }
+  } catch (e: any) { return NextResponse.json({ error: e.message }, { status: 500 }); }
 }
