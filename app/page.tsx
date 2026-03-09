@@ -1601,7 +1601,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
               </button>
               <button onClick={() => { setShowPreview(false); handlePrint(); }} disabled={loading}
                 style={{ flex: 2, padding: 12, background: C.blue, border: "none", borderRadius: 10, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", color: "#fff" }}>
-                {loading ? "Envoi..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
+                {loading ? "Envoi..." : ("🖨️ Imprimer" + (qty > 1 ? " (×" + qty + ")" : ""))}
               </button>
             </div>
           </div>
@@ -1620,7 +1620,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
             style={{ flex: 2, padding: "14px", borderRadius: 12, border: "none", cursor: loading || !printerId ? "not-allowed" : "pointer",
               background: loading || !printerId ? C.borderStrong : C.blue, color: "#fff",
               fontSize: 15, fontWeight: 800, fontFamily: "inherit" }}>
-            {loading ? "Envoi en cours..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
+            {loading ? "Envoi en cours..." : ("🖨️ Imprimer" + (qty > 1 ? " (×" + qty + ")" : ""))}
           </button>
         </div>
       ) : (
@@ -1628,7 +1628,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
           style={{ width: "100%", padding: "14px", borderRadius: 12, border: "none", cursor: loading || !printerId ? "not-allowed" : "pointer",
             background: loading || !printerId ? C.borderStrong : C.blue, color: "#fff",
             fontSize: 15, fontWeight: 800, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-          {loading ? "Envoi en cours..." : `🖨️ Imprimer${qty > 1 ? ` (×${qty})` : ""}`}
+          {loading ? "Envoi en cours..." : ("🖨️ Imprimer" + (qty > 1 ? " (×" + qty + ")" : ""))}
         </button>
       )}
     </div>
