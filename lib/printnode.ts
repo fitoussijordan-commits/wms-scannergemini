@@ -70,6 +70,41 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
 }
 
 // ============================================
+// PDF PRINT (base64 PDF direct to PrintNode)
+// ============================================
+async function submitPdfJob(printerId: number, title: string, pdfBase64: string, qty: number = 1): Promise<number> {
+  // Repeat PDF for multiple copies by sending qty in the job
+  const res = await fetch("/api/printnode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "print",
+      printerId,
+      title,
+      content: pdfBase64,
+      source: "WMS Scanner",
+      contentType: "pdf_base64",
+      qty,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Erreur impression ${res.status}`);
+  }
+  const data = await res.json();
+  return data.jobId;
+}
+
+export async function printPdfLabel(
+  printerId: number, pdfBase64: string, title: string = "Étiquette", qty: number = 1
+): Promise<{ success: boolean; jobId?: number; error?: string }> {
+  try {
+    const jobId = await submitPdfJob(printerId, title, pdfBase64, qty);
+    return { success: true, jobId };
+  } catch (e: any) { return { success: false, error: e.message }; }
+}
+
+// ============================================
 // ZPL HELPERS
 // ============================================
 function trunc(s: string, max: number): string {
@@ -256,6 +291,63 @@ function zplSafe(s: string): string {
     .replace(/Ù/g, "\xD9").replace(/Û/g, "\xDB")
     .replace(/Ç/g, "\xC7")
     .replace(/[^\x20-\xFF]/g, "");
+}
+
+// Convert PaletteLabelData to LabelTemplate for jsPDF rendering
+export function paletteDataToTemplate(data: PaletteLabelData): import("@/components/LabelEditor").LabelTemplate {
+  const W = 100, H = 150;
+  const elements: import("@/components/LabelEditor").LabelElement[] = [];
+  let y = 4;
+  const uid = () => Math.random().toString(36).slice(2, 8);
+
+  const addText = (text: string, fontSize: number, bold = false, align: "left"|"center"|"right" = "left", h = fontSize * 0.4) => {
+    if (!text) return;
+    elements.push({ id: uid(), type: "text", x: 4, y, w: W - 8, h: Math.max(h, fontSize * 0.4 + 1), text, fontSize, bold, align });
+    y += fontSize * 0.4 + 2;
+  };
+  const addLine = () => {
+    elements.push({ id: uid(), type: "line", x: 2, y, w: W - 4, h: 0.5, thickness: 0.3 });
+    y += 2;
+  };
+
+  // Expéditeur
+  addText("Expéditeur", 7, false, "left");
+  if (data.senderName) addText(data.senderName, 9, true);
+  if (data.senderAddress) addText(data.senderAddress, 8);
+  y += 1; addLine();
+
+  // Destinataire
+  addText("Destinataire", 7);
+  if (data.recipientName) addText(data.recipientName, 13, true);
+  if (data.recipientAddress) addText(data.recipientAddress, 9);
+  y += 1; addLine();
+
+  // Contenu
+  addText("Contenu", 7);
+  const refs = data.refs && data.refs.length > 0
+    ? data.refs
+    : [{ ref: data.ref, productName: data.productName, lot: data.lotNumber, qty: data.quantity }];
+
+  for (const r of refs) {
+    if (r.productName) addText(r.productName, 10, true);
+    const parts = [r.ref && `Réf: ${r.ref}`, r.lot && `Lot: ${r.lot}`, r.qty && `Qt: ${r.qty}${data.unit ? " " + data.unit : ""}`].filter(Boolean).join("  ");
+    if (parts) addText(parts, 8);
+  }
+  if (data.weight) addText(`Poids: ${data.weight}`, 8);
+  if (data.expiryDate) addText(`DLUO: ${data.expiryDate}`, 8);
+  const refs2 = [data.orderRef && `CDE: ${data.orderRef}`, data.deliveryRef && `BL: ${data.deliveryRef}`].filter(Boolean).join("   ");
+  if (refs2) addText(refs2, 8);
+
+  y += 1; addLine();
+
+  // SSCC barcode
+  addText("SSCC (00)", 7);
+  const ssccH = Math.min(H - y - 12, 22);
+  elements.push({ id: uid(), type: "barcode", x: 4, y, w: W - 8, h: ssccH, value: `00${data.sscc}` });
+  y += ssccH + 2;
+  addText(`(00) ${data.sscc || ""}`, 7, false, "center");
+
+  return { widthMM: W, heightMM: H, elements };
 }
 
 export function generatePaletteZPL(data: PaletteLabelData): string {

@@ -75,13 +75,17 @@ export async function POST(req: NextRequest) {
     const { action } = body;
 
     if (action === "print") {
-      const { printerId, title, content, source, usePdf, labelWidthMM, labelHeightMM } = body;
+      const { printerId, title, content, source, usePdf, labelWidthMM, labelHeightMM, contentType: reqContentType, qty } = body;
 
       let finalContent = content;
       let contentType = "raw_base64";
 
-      if (usePdf) {
-        // Decode ZPL from base64, convert to PDF via Labelary
+      if (reqContentType === "pdf_base64") {
+        // Direct PDF from client (jsPDF) — no conversion needed
+        finalContent = content;
+        contentType = "pdf_base64";
+      } else if (usePdf) {
+        // ZPL → PDF via Labelary (legacy palette path)
         const zpl = Buffer.from(content, "base64").toString("utf-8");
         finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
         contentType = "pdf_base64";
