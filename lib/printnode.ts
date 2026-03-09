@@ -211,123 +211,144 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
 // ============================================
 // PALETTE LABEL (GS1 logistics label)
 // ============================================
+export interface PaletteRef {
+  ref?: string;
+  productName?: string;
+  lot?: string;
+  qty?: number;
+}
+
 export interface PaletteLabelData {
   // Expéditeur
-  senderName: string;
+  senderName?: string;
   senderAddress?: string;
   // Destinataire
-  recipientName: string;
+  recipientName?: string;
   recipientAddress?: string;
-  // Contenu palette
-  productName: string;
+  // Contenu palette — multi-produits
+  refs?: PaletteRef[];          // liste de refs/produits
+  productName?: string;         // fallback mono-produit
   ref?: string;
   lotNumber?: string;
-  sscc: string;           // 18-digit Serial Shipping Container Code
-  quantity: number;
-  unit?: string;          // ex: "cartons", "kg", "unités"
-  expiryDate?: string;    // DLUO / DLC
-  weight?: string;        // ex: "250 kg"
+  sscc: string;
+  quantity?: number;
+  unit?: string;
+  expiryDate?: string;
+  weight?: string;
   // Transport
-  orderRef?: string;      // N° commande
-  deliveryRef?: string;   // N° BL
+  orderRef?: string;
+  deliveryRef?: string;
+}
+
+// Normalize accents for ZPL CI28 — replace problematic chars
+function zplSafe(s: string): string {
+  if (!s) return "";
+  return s
+    .replace(/é/g, "\xE9").replace(/è/g, "\xE8").replace(/ê/g, "\xEA").replace(/ë/g, "\xEB")
+    .replace(/à/g, "\xE0").replace(/â/g, "\xE2").replace(/ä/g, "\xE4")
+    .replace(/î/g, "\xEE").replace(/ï/g, "\xEF")
+    .replace(/ô/g, "\xF4").replace(/ö/g, "\xF6")
+    .replace(/ù/g, "\xF9").replace(/û/g, "\xFB").replace(/ü/g, "\xFC")
+    .replace(/ç/g, "\xE7").replace(/ñ/g, "\xF1")
+    .replace(/É/g, "\xC9").replace(/È/g, "\xC8").replace(/Ê/g, "\xCA")
+    .replace(/À/g, "\xC0").replace(/Â/g, "\xC2")
+    .replace(/Î/g, "\xCE").replace(/Ô/g, "\xD4")
+    .replace(/Ù/g, "\xD9").replace(/Û/g, "\xDB")
+    .replace(/Ç/g, "\xC7")
+    .replace(/[^\x20-\xFF]/g, "");
 }
 
 export function generatePaletteZPL(data: PaletteLabelData): string {
-  // Palette labels use a fixed large format: 100x150mm (A6 landscape-ish)
-  // Overrides the user label size for palettes
-  const W = mm(100); // 800 dots
-  const H = mm(150); // 1200 dots
-  const cW = W - 30;
-  const lineH = 32;
-  const smallH = 24;
-  const sectionGap = 10;
+  const W = mm(100);
+  const H = mm(150);
+  const cW = W - 24;
+  const sH = 22;   // small line height
+  const mH = 28;   // medium
+  const lH = 36;   // large
+  const sectionGap = 8;
 
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
+  const hline = (yPos: number) => `^FO10,${yPos}^GB${W - 20},2,2^FS`;
 
-  // ── TOP SECTION: Expéditeur / Destinataire ──────────────────────
-  let y = 12;
+  let y = 10;
 
-  // Separator line helper
-  const hline = (yPos: number) =>
-    `^FO10,${yPos}^GB${W - 20},2,2^FS`;
-
-  // Header: EXPÉDITEUR
-  lines.push(`^FO10,${y}^A0N,20,20^FDExpéditeur^FS`);
-  y += 22;
-  lines.push(`^FO10,${y}^A0N,${lineH},${lineH}^FB${Math.round(cW * 0.5)},1,0,L^FD${trunc(data.senderName, 20)}^FS`);
+  // ── EXPÉDITEUR ──
+  lines.push(`^FO10,${y}^A0N,18,18^FDExpediteur^FS`);
+  y += 20;
+  if (data.senderName) {
+    lines.push(`^FO10,${y}^A0N,${mH},${mH}^FB${cW},2,0,L^FD${zplSafe(data.senderName)}^FS`);
+    y += mH + 4;
+  }
   if (data.senderAddress) {
-    lines.push(`^FO10,${y + lineH - 2}^A0N,20,20^FB${Math.round(cW * 0.5)},1,0,L^FD${trunc(data.senderAddress, 30)}^FS`);
-    y += 22;
+    lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},2,0,L^FD${zplSafe(data.senderAddress)}^FS`);
+    y += sH * 2 + 2;
   }
-  y += lineH + 4;
 
-  lines.push(hline(y));
-  y += sectionGap + 4;
+  lines.push(hline(y)); y += sectionGap + 4;
 
-  // Header: DESTINATAIRE (larger, prominent)
-  lines.push(`^FO10,${y}^A0N,20,20^FDDestinataire^FS`);
-  y += 22;
-  lines.push(`^FO10,${y}^A0N,38,38^FB${cW},1,0,L^FD${trunc(data.recipientName, 18)}^FS`);
-  y += 40;
+  // ── DESTINATAIRE ──
+  lines.push(`^FO10,${y}^A0N,18,18^FDDestinataire^FS`);
+  y += 20;
+  if (data.recipientName) {
+    lines.push(`^FO10,${y}^A0N,${lH},${lH}^FB${cW},2,0,L^FD${zplSafe(data.recipientName)}^FS`);
+    y += lH * 2 + 4;
+  }
   if (data.recipientAddress) {
-    lines.push(`^FO10,${y}^A0N,22,22^FB${cW},1,0,L^FD${trunc(data.recipientAddress, 35)}^FS`);
-    y += 26;
+    lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},2,0,L^FD${zplSafe(data.recipientAddress)}^FS`);
+    y += sH * 2 + 2;
   }
 
-  lines.push(hline(y));
-  y += sectionGap + 4;
+  lines.push(hline(y)); y += sectionGap + 4;
 
-  // ── MIDDLE SECTION: Contenu ──────────────────────────────────────
-  lines.push(`^FO10,${y}^A0N,20,20^FDContenu^FS`);
-  y += 22;
+  // ── CONTENU ──
+  lines.push(`^FO10,${y}^A0N,18,18^FDContenu^FS`);
+  y += 20;
 
-  // Product name (bold / larger)
-  lines.push(`^FO10,${y}^A0N,30,30^FB${cW},1,0,L^FD${trunc(data.productName, 26)}^FS`);
-  y += 34;
+  // Multi-refs (plusieurs produits sur la palette)
+  const allRefs: PaletteRef[] = data.refs && data.refs.length > 0
+    ? data.refs
+    : [{ ref: data.ref, productName: data.productName, lot: data.lotNumber, qty: data.quantity }];
 
-  if (data.ref) {
-    lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FDRéf: ${trunc(data.ref, 20)}^FS`);
-    y += smallH + 4;
-  }
-
-  // Quantity + unit on the left, lot on the right
-  const qtyStr = `Qté: ${data.quantity}${data.unit ? " " + data.unit : ""}`;
-  lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FD${qtyStr}^FS`);
-  if (data.lotNumber) {
-    lines.push(`^FO${Math.round(W / 2)},${y}^A0N,${smallH},${smallH}^FDLot: ${trunc(data.lotNumber, 14)}^FS`);
-  }
-  y += smallH + 4;
-
-  if (data.expiryDate || data.weight) {
-    if (data.expiryDate) {
-      lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FDDLUO: ${formatDate(data.expiryDate)}^FS`);
+  for (const r of allRefs) {
+    if (r.productName) {
+      lines.push(`^FO10,${y}^A0N,${mH},${mH}^FB${cW},2,0,L^FD${zplSafe(r.productName)}^FS`);
+      y += mH + 2;
     }
-    if (data.weight) {
-      lines.push(`^FO${Math.round(W / 2)},${y}^A0N,${smallH},${smallH}^FDPoids: ${data.weight}^FS`);
+    // Ref + lot + qty on same line
+    const parts: string[] = [];
+    if (r.ref) parts.push(`Ref: ${r.ref}`);
+    if (r.lot) parts.push(`Lot: ${r.lot}`);
+    if (r.qty) parts.push(`Qt: ${r.qty}${data.unit ? " " + data.unit : " cartons"}`);
+    if (parts.length > 0) {
+      lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},2,0,L^FD${zplSafe(parts.join(" / "))}^FS`);
+      y += sH + 4;
     }
-    y += smallH + 4;
+  }
+
+  if (data.weight) {
+    lines.push(`^FO10,${y}^A0N,${mH},${mH}^FDPoids: ${zplSafe(data.weight)}^FS`);
+    y += mH + 4;
+  }
+
+  if (data.expiryDate) {
+    lines.push(`^FO10,${y}^A0N,${sH},${sH}^FDDLUO: ${formatDate(data.expiryDate)}^FS`);
+    y += sH + 4;
   }
 
   if (data.orderRef || data.deliveryRef) {
-    if (data.orderRef) {
-      lines.push(`^FO10,${y}^A0N,${smallH},${smallH}^FDCDE: ${trunc(data.orderRef, 14)}^FS`);
-    }
-    if (data.deliveryRef) {
-      lines.push(`^FO${Math.round(W / 2)},${y}^A0N,${smallH},${smallH}^FDBL: ${trunc(data.deliveryRef, 14)}^FS`);
-    }
-    y += smallH + 4;
+    const refs2 = [data.orderRef && `CDE: ${data.orderRef}`, data.deliveryRef && `BL: ${data.deliveryRef}`].filter(Boolean).join("   ");
+    lines.push(`^FO10,${y}^A0N,${sH},${sH}^FB${cW},1,0,L^FD${zplSafe(refs2)}^FS`);
+    y += sH + 4;
   }
 
-  lines.push(hline(y + 4));
-  y += sectionGap + 8;
+  lines.push(hline(y + 2)); y += sectionGap + 8;
 
-  // ── BOTTOM SECTION: SSCC barcode (GS1-128) ──────────────────────
-  lines.push(`^FO10,${y}^A0N,20,20^FDSSCC (00)^FS`);
-  y += 22;
+  // ── SSCC barcode ──
+  lines.push(`^FO10,${y}^A0N,18,18^FDSSCC (00)^FS`);
+  y += 20;
 
-  // SSCC must be encoded as GS1-128 with AI (00) prefix
   const ssccPayload = `00${data.sscc}`;
-  const bcH = Math.min(H - y - 30, 100);
+  const bcH = Math.min(H - y - 32, 90);
   const barW = 3;
   const modules = 11 * ssccPayload.length + 35;
   const bcPixelW = modules * barW;
@@ -336,7 +357,6 @@ export function generatePaletteZPL(data: PaletteLabelData): string {
   lines.push(`^BY${barW},3,${bcH}^FO${x},${y}^BCN,${bcH},N,N,N^FD>:${ssccPayload}^FS`);
   y += bcH + 4;
 
-  // SSCC in human-readable below barcode
   const ssccFormatted = `(00) ${data.sscc.replace(/(\d{2})(\d{7})(\d{9})/, "$1 $2 $3")}`;
   lines.push(`^FO10,${y}^A0N,20,20^FB${cW},1,0,C^FD${ssccFormatted}^FS`);
 

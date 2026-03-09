@@ -1194,19 +1194,17 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         if (!lines.length) { onToast("⚠️ Ajoute au moins une ligne"); setLoading(false); return; }
         result = await pn.printBlankLabel(printerId, { lines, barcode: blankBarcode || undefined }, "Étiquette vierge", qty);
       } else {
-        if (!pal.sscc || !pal.refs[0]?.productName || !pal.recipientName) { onToast("⚠️ SSCC, produit et destinataire requis"); setLoading(false); return; }
-        // Use first ref as main product for palette label, extras as additional refs
-        const mainRef = pal.refs[0];
-        const extraRefs = pal.refs.slice(1).map(r => r.ref || r.productName).filter(Boolean).join(" / ");
+        if (!pal.sscc) { onToast("⚠️ SSCC requis"); setLoading(false); return; }
+        const mainRef = pal.refs[0] || {};
+        // Pass all refs as array — ZPL handles multi-product display
         result = await pn.printPaletteLabel(printerId, {
           senderName: pal.senderName, senderAddress: pal.senderAddress,
           recipientName: pal.recipientName, recipientAddress: pal.recipientAddress,
-          productName: pal.refs.map(r => r.productName).filter(Boolean).join(" + "),
-          ref: pal.refs.map(r => r.ref).filter(Boolean).join(" / "),
-          lotNumber: mainRef.lotNumber,
+          refs: pal.refs.map((r: any) => ({ ref: r.ref, productName: r.productName, lot: r.lotNumber, qty: r.quantity })),
           sscc: pal.sscc,
-          quantity: mainRef.quantity, unit: mainRef.unit,
-          expiryDate: mainRef.expiryDate, weight: mainRef.weight,
+          unit: mainRef.unit,
+          expiryDate: mainRef.expiryDate,
+          weight: pal.refs.find((r: any) => r.weight)?.weight,
           orderRef: pal.orderRef, deliveryRef: pal.deliveryRef,
         }, qty);
       }
@@ -1393,7 +1391,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div>
                     <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 3 }}>Produit *</div>
-                    <input value={ref.productName} onChange={e => updateRef(i, "productName", e.target.value)} placeholder="Nom produit *"
+                    <input value={ref.productName} onChange={e => updateRef(i, "productName", e.target.value)} placeholder="Nom produit"
                       style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
                   </div>
                   <div>
