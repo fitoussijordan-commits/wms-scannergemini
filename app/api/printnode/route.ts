@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
         contentType = "pdf_base64";
       } else if (usePdf) {
         // ZPL → PDF via Labelary (legacy palette path)
-        const zpl = Buffer.from(content, "base64").toString("utf-8");
+        const zpl = Buffer.from(content, "base64").toString("latin1");
         try {
           finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
         } catch (labelaryErr: any) {
