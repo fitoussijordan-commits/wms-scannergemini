@@ -55,7 +55,7 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       action: "print",
       printerId,
       title,
-      content: btoa(unescape(encodeURIComponent(fullZpl))),
+      content: btoa(fullZpl),
       source: "WMS Scanner",
       usePdf,
       labelWidthMM,
