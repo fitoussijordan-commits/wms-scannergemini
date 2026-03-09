@@ -376,9 +376,10 @@ export function generatePaletteZPL(data: PaletteLabelData): string {
 
   let y = 10;
 
-  // ── NUMÉRO PALETTE ──
+  // ── NUMÉRO PALETTE (gros, coin haut droit) ──
   if (data.paletteNumber !== undefined) {
-    lines.push(`^FO${W - 110},8^A0N,70,70^FD P${data.paletteNumber}^FS`);
+    lines.push(`^FO${W - 220},5^A0N,210,210^FD P${data.paletteNumber}^FS`);
+    y = 225; // décale le contenu sous le gros numéro
   }
 
   // ── EXPÉDITEUR ──
