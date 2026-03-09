@@ -104,8 +104,6 @@ export async function POST(req: NextRequest) {
           contentType,
           content: finalContent,
           source: source || "WMS Scanner",
-          // For PDF: qty handled by PrintNode. For ZPL raw: already repeated in ZPL client-side
-          ...(contentType === "pdf_base64" && qty && qty > 1 ? { qty } : {}),
         }),
       });
 
