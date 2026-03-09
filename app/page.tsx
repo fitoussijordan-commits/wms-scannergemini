@@ -1085,7 +1085,7 @@ function Alert({ type, children }: { type: string; children: React.ReactNode }) 
 // LABELS SCREEN
 // ============================================
 function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToast: (msg: string) => void; session: any }) {
-  const [tab, setTab] = useState<"blank" | "palette">("blank");
+  const [tab, setTab] = useState<"blank" | "palette" | "chain">("blank");
   const getDefaultTemplate = (): LabelTemplate => {
     const cfg = pn.getLabelTypeConfig("blank");
     return { widthMM: cfg.labelSize.widthMM, heightMM: cfg.labelSize.heightMM, elements: [] };
@@ -1095,11 +1095,11 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
   // Update printer/size when tab changes to reflect per-type settings
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   // Use per-type config from settings (palette & blank have their own)
-  const getPrinterForTab = (t: "blank" | "palette") => {
+  const getPrinterForTab = (t: "blank" | "palette" | "chain") => {
     const cfg = pn.getLabelTypeConfig(t);
     return cfg.printerId || pn.getSavedPrinterId();
   };
-  const getSizeForTab = (t: "blank" | "palette") => {
+  const getSizeForTab = (t: "blank" | "palette" | "chain") => {
     const cfg = pn.getLabelTypeConfig(t);
     return cfg.labelSize;
   };
@@ -1112,9 +1112,30 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
       setLabelTemplate(prev => ({ ...prev, widthMM: labelSize.widthMM, heightMM: labelSize.heightMM }));
     }
   }, [labelSize, tab]);
+
+  // Sync canvas size when label size changes
+  useEffect(() => {
+    if (tab === "blank") {
+      setLabelTemplate(prev => ({ ...prev, widthMM: labelSize.widthMM, heightMM: labelSize.heightMM }));
+    }
+  }, [labelSize, tab]);
   const [qty, setQty] = useState(1);
   const [loading, setLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  // ── CHAIN (impression palette en chaîne) ──
+  const emptyChainPalette = () => ({
+    id: Math.random().toString(36).slice(2, 8),
+    lines: [{ ref: "", qty: "", lot: "" }] as { ref: string; qty: string; lot: string }[],
+  });
+  const [chain, setChain] = useState({
+    recipientName: "",
+    recipientAddress: "",
+    senderName: "",
+    unit: "cartons",
+    orderRef: "",
+    palettes: [emptyChainPalette()],
+  });
+
   const isDesktop = typeof window !== "undefined" && window.innerWidth >= 1024;
 
   // Blank label state
@@ -1203,6 +1224,35 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
     setLoading(true);
     let result: { success: boolean; error?: string };
     try {
+      if (tab === "chain") {
+        // Impression en chaîne — une palette à la fois
+        if (!chain.recipientName) { onToast("⚠️ Destinataire requis"); setLoading(false); return; }
+        const validPalettes = chain.palettes.filter(p => p.lines.some(l => l.ref.trim()));
+        if (!validPalettes.length) { onToast("⚠️ Ajoute au moins une référence"); setLoading(false); return; }
+        let ok = 0;
+        for (const p of validPalettes) {
+          const sscc = (() => {
+            const serial = String(Date.now() + ok).slice(-9);
+            const raw = "0" + "7383773" + serial;
+            const digits = raw.split("").map(Number);
+            const check = (10 - (digits.reduce((s: number, d: number, i: number) => s + d * (i % 2 === 0 ? 3 : 1), 0) % 10)) % 10;
+            return raw + check;
+          })();
+          const refs = p.lines.filter(l => l.ref.trim()).map(l => ({ ref: l.ref, lot: l.lot, qty: l.qty ? Number(l.qty) : undefined }));
+          const palData: pn.PaletteLabelData = {
+            senderName: chain.senderName, recipientName: chain.recipientName,
+            recipientAddress: chain.recipientAddress, refs, sscc, unit: chain.unit,
+            orderRef: chain.orderRef,
+          };
+          const palTemplate = pn.paletteDataToTemplate(palData);
+          const pdfB64 = await generateLabelPDF(palTemplate);
+          const r = await pn.printPdfLabel(printerId, pdfB64, `Palette ${ok + 1} → ${chain.recipientName}`, 1);
+          if (r.success) ok++; else { onToast("❌ Palette " + (ok + 1) + ": " + (r.error || "erreur")); break; }
+          await new Promise(res => setTimeout(res, 300)); // small delay between jobs
+        }
+        if (ok === validPalettes.length) onToast(`✅ ${ok} palette(s) envoyées`);
+        setLoading(false); return;
+      }
       if (tab === "blank") {
         if (!labelTemplate.elements.length) { onToast("⚠️ Ajoute au moins un élément"); setLoading(false); return; }
         const pdfB64 = await generateLabelPDF(labelTemplate);
@@ -1306,7 +1356,7 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
 
       {/* Tabs */}
       <div style={{ display: "flex", background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, overflow: "hidden", marginBottom: 14 }}>
-        {([["blank", "✏️ Vierge"], ["palette", "🏭 Palette"]] as const).map(([id, label]) => (
+        {([["blank", "✏️ Vierge"], ["palette", "🏭 Palette"], ["chain", "🔗 Chaîne"]] as const).map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             style={{ flex: 1, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", border: "none", fontFamily: "inherit",
               background: tab === id ? C.blue : "transparent", color: tab === id ? "#fff" : C.textSec }}>
@@ -1462,7 +1512,78 @@ function LabelsScreen({ onBack, onToast, session }: { onBack: () => void; onToas
         )}
       </div>
 
-      {/* Preview modal — desktop only, palette tab only */}
+
+        {/* ── CHAÎNE ── */}
+        {tab === "chain" && (
+          <div>
+            {/* Destinataire commun */}
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: "uppercase" as const, letterSpacing: "0.05em", marginBottom: 8 }}>Destinataire (commun à toutes les palettes)</div>
+            <input value={chain.recipientName} onChange={e => setChain({ ...chain, recipientName: e.target.value })}
+              placeholder="Nom destinataire"
+              style={{ width: "100%", padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box" as const }} />
+            <input value={chain.recipientAddress} onChange={e => setChain({ ...chain, recipientAddress: e.target.value })}
+              placeholder="Adresse (optionnel)"
+              style={{ width: "100%", padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", marginBottom: 6, boxSizing: "border-box" as const }} />
+            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+              <input value={chain.senderName} onChange={e => setChain({ ...chain, senderName: e.target.value })}
+                placeholder="Expéditeur"
+                style={{ flex: 1, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+              <input value={chain.unit} onChange={e => setChain({ ...chain, unit: e.target.value })}
+                placeholder="Unité"
+                style={{ width: 90, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+              <input value={chain.orderRef} onChange={e => setChain({ ...chain, orderRef: e.target.value })}
+                placeholder="N° CDE"
+                style={{ width: 110, padding: "9px 10px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, fontFamily: "inherit", boxSizing: "border-box" as const }} />
+            </div>
+
+            {/* Palettes */}
+            {chain.palettes.map((pal2, pi) => (
+              <div key={pal2.id} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: 10, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Palette {pi + 1}</div>
+                  {chain.palettes.length > 1 && (
+                    <button onClick={() => setChain({ ...chain, palettes: chain.palettes.filter((_, j) => j !== pi) })}
+                      style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>Supprimer</button>
+                  )}
+                </div>
+                {/* Lignes ref */}
+                {pal2.lines.map((line, li) => (
+                  <div key={li} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                    <input value={line.ref} onChange={e => {
+                      const ps = [...chain.palettes]; ps[pi].lines[li].ref = e.target.value; setChain({ ...chain, palettes: ps });
+                    }} placeholder="Réf / Désignation"
+                      style={{ flex: 2, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit" }} />
+                    <input value={line.lot} onChange={e => {
+                      const ps = [...chain.palettes]; ps[pi].lines[li].lot = e.target.value; setChain({ ...chain, palettes: ps });
+                    }} placeholder="Lot"
+                      style={{ flex: 1, padding: "7px 8px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit" }} />
+                    <input value={line.qty} onChange={e => {
+                      const ps = [...chain.palettes]; ps[pi].lines[li].qty = e.target.value; setChain({ ...chain, palettes: ps });
+                    }} placeholder="Qté"
+                      style={{ width: 60, padding: "7px 6px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontFamily: "inherit", textAlign: "center" as const }} />
+                    {pal2.lines.length > 1 && (
+                      <button onClick={() => {
+                        const ps = [...chain.palettes]; ps[pi].lines = ps[pi].lines.filter((_, j) => j !== li); setChain({ ...chain, palettes: ps });
+                      }} style={{ background: "none", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 16, lineHeight: 1 }}>✕</button>
+                    )}
+                  </div>
+                ))}
+                <button onClick={() => {
+                  const ps = [...chain.palettes]; ps[pi].lines.push({ ref: "", qty: "", lot: "" }); setChain({ ...chain, palettes: ps });
+                }} style={{ width: "100%", padding: "5px", border: `1px dashed ${C.border}`, borderRadius: 6, background: "transparent", color: C.textMuted, cursor: "pointer", fontSize: 12, fontFamily: "inherit" }}>
+                  + Ligne
+                </button>
+              </div>
+            ))}
+
+            <button onClick={() => setChain({ ...chain, palettes: [...chain.palettes, emptyChainPalette()] })}
+              style={{ width: "100%", padding: 10, border: `1px dashed ${C.blue}`, borderRadius: 8, background: C.blueSoft, color: C.blue, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit", marginBottom: 4 }}>
+              + Palette {chain.palettes.length + 1}
+            </button>
+          </div>
+        )}
+
+      {/* Preview modal — desktop only, palette tab only */
       {showPreview && tab === "palette" && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
           <div style={{ background: C.white, borderRadius: 16, width: "100%", maxWidth: 680, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }}>
