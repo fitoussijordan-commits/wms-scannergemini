@@ -257,14 +257,17 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
   let y = startY;
   const lines: string[] = ["^XA", `^PW${W}`, `^LL${H}`, "^CI28"];
 
-  // Utilise le code-barres sans préfixe "B-" comme nom affiché
-  const displayName = locationBarcode ? locationBarcode.replace(/^B-/i, "") : locationName;
-  lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${displayName}^FS`);
+  // Affiche uniquement le premier segment du nom (ex: "A12" depuis "A12-RKC1-RKC11")
+  // ou le code-barres sans préfixe "B-"
+  const shortName = locationBarcode
+    ? locationBarcode.replace(/^B-/i, "")
+    : (locationName.split("-")[0] || locationName);
+  lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${shortName}^FS`);
   y += nameBlock;
 
-  if (locationBarcode) {
-    lines.push(barcodeZPL(locationBarcode, W, y, bcH, barW));
-  }
+  // Code-barres: utilise locationBarcode ou dérive depuis le nom
+  const barcodeVal = locationBarcode || locationName;
+  lines.push(barcodeZPL(barcodeVal, W, y, bcH, barW));
   lines.push("^XZ");
 
   return lines.join("\n");
