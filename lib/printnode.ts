@@ -47,11 +47,6 @@ export async function listPrinters(): Promise<PrintNodePrinter[]> {
 // ============================================
 async function submitPrintJob(printerId: number, title: string, zpl: string, qty: number = 1): Promise<number> {
   const fullZpl = qty > 1 ? Array(qty).fill(zpl).join("\n") : zpl;
-  // Encode ZPL as UTF-8 bytes, then to base64 (handles accented chars)
-  const bytes = new TextEncoder().encode(fullZpl);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  const b64 = btoa(binary);
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -59,7 +54,7 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
       action: "print",
       printerId,
       title,
-      content: b64,
+      content: btoa(fullZpl),
       source: "WMS Scanner",
     }),
   });
@@ -71,14 +66,13 @@ async function submitPrintJob(printerId: number, title: string, zpl: string, qty
   return data.jobId;
 }
 
-// Palette labels go via Labelary (ZPL→PDF) because Zebra thermal
-// handles PDF better for complex layouts
+// Palette only: ZPL→PDF via Labelary. Latin1 encode for accents.
 async function submitPaletteJob(printerId: number, title: string, zpl: string, labelWidthMM: number, labelHeightMM: number): Promise<number> {
-  // Encode ZPL as UTF-8 bytes, then to base64
-  const bytes = new TextEncoder().encode(zpl);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  const b64 = btoa(binary);
+  // Encode latin1 bytes safely for btoa
+  const encoded = btoa(Array.from(zpl).map(c => {
+    const code = c.charCodeAt(0);
+    return code <= 255 ? String.fromCharCode(code) : "?";
+  }).join(""));
   const res = await fetch("/api/printnode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -86,7 +80,7 @@ async function submitPaletteJob(printerId: number, title: string, zpl: string, l
       action: "print",
       printerId,
       title,
-      content: b64,
+      content: encoded,
       source: "WMS Scanner",
       usePdf: true,
       labelWidthMM,
@@ -566,10 +560,16 @@ export async function printProductLabel(
   printerId: number, productName: string, barcode: string, ref?: string, qty: number = 1
 ): Promise<{ success: boolean; jobId?: number; error?: string }> {
   try {
+    console.log("[printProductLabel] start", { printerId, productName, barcode });
     const zpl = generateProductZPL(productName, barcode, ref);
+    console.log("[printProductLabel] zpl ok, len:", zpl.length);
     const jobId = await submitPrintJob(printerId, `Produit: ${productName}`, zpl, qty);
+    console.log("[printProductLabel] jobId:", jobId);
     return { success: true, jobId };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) {
+    console.error("[printProductLabel] ERROR:", e.message, e.stack);
+    return { success: false, error: e.message };
+  }
 }
 
 export async function printLotLabel(

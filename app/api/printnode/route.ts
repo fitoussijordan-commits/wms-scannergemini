@@ -1,5 +1,4 @@
 // app/api/printnode/route.ts — Server-side proxy for PrintNode API
-// API key stays server-side, never exposed to the browser
 import { NextRequest, NextResponse } from "next/server";
 const API_URL = "https://api.printnode.com";
 
@@ -26,8 +25,7 @@ async function zplToPdfBase64(zpl: string, widthMM: number = 100, heightMM: numb
     body: zpl,
   });
   if (!res.ok) throw new Error(`Labelary error ${res.status}: ${await res.text()}`);
-  const pdfBytes = Buffer.from(await res.arrayBuffer());
-  return pdfBytes.toString("base64");
+  return Buffer.from(await res.arrayBuffer()).toString("base64");
 }
 
 export async function GET(req: NextRequest) {
@@ -52,7 +50,7 @@ export async function POST(req: NextRequest) {
     const { action } = body;
 
     if (action === "print") {
-      const { printerId, title, content, source, usePdf, labelWidthMM, labelHeightMM, contentType: reqContentType, qty } = body;
+      const { printerId, title, content, source, usePdf, labelWidthMM, labelHeightMM, contentType: reqContentType } = body;
 
       let finalContent = content;
       let contentType = "raw_base64";
@@ -61,9 +59,7 @@ export async function POST(req: NextRequest) {
         finalContent = content;
         contentType = "pdf_base64";
       } else if (usePdf) {
-        // Palette path: ZPL → PDF via Labelary
-        // content is base64(encodeURIComponent(zpl)) — decode as utf-8
-        const zpl = Buffer.from(content, "base64").toString("utf-8");
+        const zpl = Buffer.from(content, "base64").toString("latin1");
         finalContent = await zplToPdfBase64(zpl, labelWidthMM || 100, labelHeightMM || 150);
         contentType = "pdf_base64";
       }
@@ -75,16 +71,11 @@ export async function POST(req: NextRequest) {
           printerId, title, contentType,
           content: finalContent,
           source: source || "WMS Scanner",
-          ...(contentType === "pdf_base64" && qty && qty > 1 ? { qty } : {}),
         }),
       });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        return NextResponse.json({ error: `PrintNode: ${errText}` }, { status: res.status });
-      }
-      const jobId = await res.json();
-      return NextResponse.json({ jobId });
+      if (!res.ok) return NextResponse.json({ error: `PrintNode: ${await res.text()}` }, { status: res.status });
+      return NextResponse.json({ jobId: await res.json() });
     }
 
     return NextResponse.json({ error: "Action inconnue" }, { status: 400 });
