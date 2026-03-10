@@ -2252,7 +2252,8 @@ function LotResult({ lot, product, stock }: { lot: any; product: any; stock: any
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 2 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Lot {lot.name}</div>
-          <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{product?.name}</div>
+          <div style={{ fontSize: 12, color: C.textMuted }}>{product?.name}</div>
+          {product?.default_code && <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Réf: {product.default_code}</div>}
         </div>
         {lot.name && (
           <button onClick={() => requestPrint({ type: "lot", title: `${lot.name} — ${product?.name || ""}`, barcode: lot.name, lotName: lot.name, productName: product?.name || "", expiryDate: lot.expiration_date || lot.use_date || lot.removal_date || "" })}
