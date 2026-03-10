@@ -264,9 +264,8 @@ export function generateLocationZPL(locationName: string, locationBarcode: strin
   lines.push(`^FO10,${y}^A0N,40,40^FB${cW},1,0,C^FD${shortName}^FS`);
   y += nameBlock;
 
-  // Code-barres: utilise shortName (scannable et cohérent avec le texte)
-  const barcodeVal = locationBarcode || shortName;
-  lines.push(barcodeZPL(barcodeVal, W, y, bcH, barW));
+  // Code-barres: toujours shortName pour que le scan soit reconnu dans Odoo
+  lines.push(barcodeZPL(shortName, W, y, bcH, barW));
   lines.push("^XZ");
 
   return lines.join("\n");
