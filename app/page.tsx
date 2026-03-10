@@ -244,7 +244,7 @@ function requestPrint(req: PrintRequest) {
 async function executePrint(req: PrintRequest, copies: number) {
   const cfg = pn.getLabelTypeConfig(req.type as pn.LabelType);
   const printerId = cfg.printerId || pn.getSavedPrinterId();
-  console.log("[executePrint] type:", req.type, "printerId:", printerId, "cfg:", cfg);
+  console.log("[executePrint] type:", req.type, "printerId:", printerId, "title:", req.title, "barcode:", req.barcode, "locationName:", req.locationName);
   if (printerId) {
     if (req.type === "product") return pn.printProductLabel(printerId, req.productName || req.title, req.barcode, req.ref, copies);
     if (req.type === "lot") return pn.printLotLabel(printerId, req.lotName || "", req.productName || "", req.barcode, req.expiryDate, copies);
