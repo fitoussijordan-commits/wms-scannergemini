@@ -543,6 +543,7 @@ export default function Page() {
 
   const quickValidate = async (line: any) => {
     if (!session || !src || !dst) return;
+    console.log("[quickValidate] src:", src.id, src.name, "dst:", dst.id, dst.name);
     setLoading(true); setError("");
     try {
       const pid = await odoo.createInternalTransfer(session, src.id, dst.id, [line]);
