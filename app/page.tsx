@@ -2873,23 +2873,6 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
-  const scanTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastKeyTime = useRef<number>(0);
-
-  // Redirige le focus vers l'input de recherche quand on scanne hors d'un input
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "BUTTON") return;
-      if (e.key.length === 1 || e.key === "Enter") {
-        searchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, []);
-
-
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
@@ -2920,6 +2903,11 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
     } catch (e: any) { onToast("Erreur: " + e.message); }
     setSearching(false);
   };
+
+  useScannerListener((code) => {
+    setQuery(code);
+    searchProducts(code);
+  }, true);
 
   const selectItem = async (result: any) => {
     setSearchResults([]);
@@ -2998,19 +2986,8 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
           <input
             ref={searchInputRef}
             autoFocus
-            value={query} onChange={e => {
-              const val = e.target.value;
-              setQuery(val);
-              const now = Date.now();
-              const delta = now - lastKeyTime.current;
-              lastKeyTime.current = now;
-              // Scanner envoie les chars très vite (<50ms entre chaque)
-              if (scanTimer.current) clearTimeout(scanTimer.current);
-              scanTimer.current = setTimeout(() => {
-                if (val.trim().length >= 4) searchProducts(val.trim());
-              }, delta < 50 ? 150 : 99999); // auto-search only if scanner speed
-            }}
-            onKeyDown={e => { if (e.key === "Enter") { const val = (e.target as HTMLInputElement).value.trim(); if (val) { if (scanTimer.current) clearTimeout(scanTimer.current); searchProducts(val); } } }}
+            value={query} onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") { const val = (e.target as HTMLInputElement).value.trim(); if (val) searchProducts(val); } }}
             placeholder="Scanner ou taper Réf, lot, code-barres..."
             style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }}
           />
