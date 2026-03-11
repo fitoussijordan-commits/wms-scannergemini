@@ -2873,54 +2873,21 @@ function ArrivalScreen({ session, onBack, onToast }: { session: any; onBack: () 
 function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
-  const queryRef = useRef("");
 
-  // Scanner buffer: accumulate chars and auto-search on Enter
+  // Redirige le focus vers l'input de recherche quand on scanne hors d'un input
   useEffect(() => {
-    let buffer = "";
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const handleKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLInputElement;
-      if (target.tagName === "INPUT" && target.type === "number") return;
-      if (e.key === "Enter") {
-        if (buffer.trim()) {
-          const val = buffer.trim();
-          queryRef.current = val;
-          setQuery(val);
-          setTimeout(async () => {
-            if (!val) return;
-            setSearching(true);
-            try {
-              const result = await odoo.smartScan(session, val);
-              if (result.type === "product") {
-                setSearchResults([{ kind: "product", productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
-              } else if (result.type === "lot") {
-                const prod = result.data.product;
-                setSearchResults([{ kind: "product", productName: prod?.name || result.data.lot.product_id[1], ref: prod?.default_code, id: prod?.id || result.data.lot.product_id[0], lotName: result.data.lot.name }]);
-              } else if (result.type === "location") {
-                setSearchResults([{ kind: "location", locationName: result.data.complete_name || result.data.name, id: result.data.id }]);
-              } else {
-                setSearchResults([]);
-                onToast("Aucun résultat trouvé");
-              }
-            } catch (e: any) { onToast("Erreur: " + e.message); }
-            setSearching(false);
-          }, 50);
-        }
-        buffer = "";
-        if (timer) clearTimeout(timer);
-        return;
-      }
-      if (e.key.length === 1) {
-        buffer += e.key;
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "BUTTON") return;
+      if (e.key.length === 1 || e.key === "Enter") {
         searchInputRef.current?.focus();
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => { buffer = ""; }, 500);
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [session]);
+  }, []);
+
+
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
@@ -2931,11 +2898,12 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
   const [saving, setSaving] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const searchProducts = async () => {
-    if (!query.trim()) return;
+  const searchProducts = async (forceVal?: string) => {
+    const val = (forceVal ?? query).trim();
+    if (!val) return;
     setSearching(true);
     try {
-      const result = await odoo.smartScan(session, query.trim());
+      const result = await odoo.smartScan(session, val);
       if (result.type === "product") {
         setSearchResults([{ kind: "product", productName: result.data.name, ref: result.data.default_code, id: result.data.id, barcode: result.data.barcode }]);
       } else if (result.type === "lot") {
@@ -3029,7 +2997,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
             ref={searchInputRef}
             autoFocus
             value={query} onChange={e => setQuery(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") searchProducts(); }}
+            onKeyDown={e => { if (e.key === "Enter") { const val = (e.target as HTMLInputElement).value.trim(); if (val) { setQuery(val); searchProducts(val); } } }}
             placeholder="Scanner ou taper Réf, lot, code-barres..."
             style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }}
           />
