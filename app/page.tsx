@@ -361,7 +361,7 @@ function loadCfg(): { u: string; d: string } | null { try { const c = localStora
 // MAIN APP
 // ============================================
 export default function Page() {
-  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory">("login");
+  const [screen, setScreen] = useState<"login" | "home" | "transfer" | "done" | "prep" | "prepDetail" | "settings" | "history" | "arrival" | "labels" | "inventory" | "eshop">("login");
   const [session, setSession] = useState<odoo.OdooSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -813,6 +813,8 @@ export default function Page() {
             <BigButton icon={prepIcon} label="Préparation" sub="Commandes à préparer et expédier" color="#7c3aed" onClick={() => { loadPickings(); setScreen("prep"); }} />
             <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>} label="Arrivage" sub="Importer une packing list WALA" color="#059669" onClick={() => setScreen("arrival")} />
+            <div style={{ height: 10 }} />
+            <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>} label="E-shop" sub="Préparer les commandes SendCloud" color="#f59e0b" onClick={() => setScreen("eshop")} />
             {history.length > 0 && <>
               <div style={{ height: 10 }} />
               <BigButton icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} label="Historique" sub={`${history.length} transfert${history.length > 1 ? "s" : ""} enregistré${history.length > 1 ? "s" : ""}`} color="#64748b" onClick={() => setScreen("history")} />
@@ -1068,6 +1070,11 @@ export default function Page() {
         {/* ===== INVENTORY ===== */}
         {screen === "inventory" && session && (
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
+        )}
+
+        {/* ===== E-SHOP ===== */}
+        {screen === "eshop" && session && (
+          <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
       </main>
 
@@ -2469,6 +2476,291 @@ const qtyBtnStyle: React.CSSProperties = {
 };
 
 const printerIconWhite = <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+
+// ============================================
+// E-SHOP SCREEN — SendCloud order preparation
+// ============================================
+function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () => void; onToast: (m: string) => void }) {
+  const [parcels, setParcels] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [selectedParcel, setSelectedParcel] = useState<any>(null);
+  const [matchData, setMatchData] = useState<Record<string, any>>({});
+  const [locationData, setLocationData] = useState<Record<number, any>>({});
+  const [preparedIds, setPreparedIds] = useState<Set<number>>(() => {
+    try { const v = localStorage.getItem("wms_eshop_prepared"); return v ? new Set(JSON.parse(v)) : new Set(); } catch { return new Set(); }
+  });
+  const [printing, setPrinting] = useState(false);
+  const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
+
+  const savePrepared = (ids: Set<number>) => {
+    setPreparedIds(ids);
+    try { localStorage.setItem("wms_eshop_prepared", JSON.stringify(Array.from(ids))); } catch {}
+  };
+
+  // Load parcels from SendCloud
+  const loadParcels = async () => {
+    setLoading(true); setError("");
+    try {
+      const res = await fetch("/api/sendcloud?action=parcels&limit=200");
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || `Erreur ${res.status}`); }
+      const data = await res.json();
+      const allParcels = data.parcels || [];
+      setParcels(allParcels);
+
+      // Match product refs with Odoo
+      const allRefs = Array.from(new Set(
+        allParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
+      )) as string[];
+      if (allRefs.length > 0 && session) {
+        const matches = await odoo.matchSupplierRefs(session, allRefs);
+        setMatchData(matches);
+        const productIds = Array.from(new Set(
+          Object.values(matches).map((m: any) => m.product_id).filter(Boolean)
+        )) as number[];
+        if (productIds.length > 0) {
+          const locs = await odoo.getProductLocations(session, productIds);
+          setLocationData(locs);
+        }
+      }
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadParcels(); }, []);
+
+  // Print SendCloud label
+  const printLabel = async (parcelId: number) => {
+    setPrinting(true);
+    try {
+      const res = await fetch(`/api/sendcloud?action=label&id=${parcelId}`);
+      if (!res.ok) { const err = await res.json(); throw new Error(err.error || "Erreur étiquette"); }
+      const data = await res.json();
+
+      const printerId = pn.getSavedPrinterId();
+      if (printerId && data.labelBase64) {
+        const result = await pn.printPdfLabel(printerId, data.labelBase64, `SendCloud ${parcelId}`);
+        if (result.success) {
+          onToast(`✓ Étiquette ${data.tracking || parcelId} imprimée`);
+          vibrateSuccess();
+        } else {
+          throw new Error(result.error || "Erreur impression");
+        }
+      } else {
+        // Fallback: download PDF
+        const byteArray = Uint8Array.from(atob(data.labelBase64), c => c.charCodeAt(0));
+        const blob = new Blob([byteArray], { type: "application/pdf" });
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank");
+        onToast("PDF ouvert dans un nouvel onglet");
+      }
+    } catch (e: any) { setError(e.message); vibrateError(); }
+    setPrinting(false);
+  };
+
+  const markPrepared = (parcelId: number) => {
+    const newSet = new Set(Array.from(preparedIds));
+    newSet.add(parcelId);
+    savePrepared(newSet);
+    vibrateSuccess();
+    onToast("✓ Marqué préparé");
+  };
+
+  const unmarkPrepared = (parcelId: number) => {
+    const newSet = new Set(Array.from(preparedIds));
+    newSet.delete(parcelId);
+    savePrepared(newSet);
+  };
+
+  const getMatch = (sku: string) => matchData[sku];
+  const getLocation = (sku: string) => {
+    const match = getMatch(sku);
+    if (match?.product_id) return locationData[match.product_id];
+    return null;
+  };
+
+  // Filter parcels
+  const filteredParcels = parcels.filter(p => {
+    if (filter === "pending") return !preparedIds.has(p.id);
+    if (filter === "prepared") return preparedIds.has(p.id);
+    return true;
+  });
+
+  const pendingCount = parcels.filter(p => !preparedIds.has(p.id)).length;
+  const preparedCount = parcels.filter(p => preparedIds.has(p.id)).length;
+
+  // Detail view
+  if (selectedParcel) {
+    const p = selectedParcel;
+    const items = p.parcel_items || [];
+    const isPrepared = preparedIds.has(p.id);
+
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <button onClick={() => setSelectedParcel(null)} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
+            <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.address?.replace(/\n/g, ", ") || `${p.city}, ${p.country?.name || ""}`}</div>
+          </div>
+          {isPrepared && <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Préparé</span>}
+        </div>
+
+        {/* Customer info */}
+        <Section>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>Client</div>
+          <div style={{ fontSize: 12, color: C.textSec }}>
+            <div style={{ fontWeight: 600 }}>{p.name}</div>
+            {p.company_name && <div>{p.company_name}</div>}
+            <div>{p.address} {p.house_number}</div>
+            <div>{p.postal_code} {p.city}</div>
+            <div>{p.country?.name || p.country_iso_2 || ""}</div>
+            {p.email && <div style={{ color: C.blue, marginTop: 4 }}>{p.email}</div>}
+            {p.telephone && <div>{p.telephone}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            {p.carrier?.code && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>🚚 {p.carrier.code}</span>}
+            {p.tracking_number && <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>📦 {p.tracking_number}</span>}
+            {p.weight && <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{p.weight} kg</span>}
+          </div>
+        </Section>
+
+        {/* Products to pick */}
+        <Section>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
+          {items.length === 0 && <div style={{ fontSize: 12, color: C.textMuted }}>Aucun article détaillé</div>}
+          {items.map((item: any, i: number) => {
+            const match = getMatch(item.sku);
+            const loc = getLocation(item.sku);
+            return (
+              <div key={i} style={{ padding: "10px 0", borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "", display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: loc ? C.greenSoft : C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
+                  {loc ? "📍" : "❓"}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{match?.product_name || item.description || item.sku}</div>
+                  <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>
+                    SKU: {item.sku || "N/A"}
+                    {match?.default_code && <span> · Réf: {match.default_code}</span>}
+                  </div>
+                  {loc && (
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#059669", marginTop: 4 }}>
+                      📍 {loc.location_name} <span style={{ fontWeight: 400, color: C.textMuted }}>({loc.quantity} en stock)</span>
+                    </div>
+                  )}
+                  {!loc && match && (
+                    <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Pas de stock trouvé</div>
+                  )}
+                  {!match && item.sku && (
+                    <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Réf non trouvée dans Odoo</div>
+                  )}
+                </div>
+                <div style={{ textAlign: "right", flexShrink: 0 }}>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{item.quantity || 1}</div>
+                  <div style={{ fontSize: 10, color: C.textMuted }}>pcs</div>
+                </div>
+              </div>
+            );
+          })}
+        </Section>
+
+        {error && <Alert type="error">{error}</Alert>}
+
+        {/* Actions */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <button onClick={() => printLabel(p.id)} disabled={printing}
+            style={{ flex: 1, padding: 12, background: C.blueSoft, color: C.blue, border: `1px solid ${C.blueBorder}`, borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+            {printing ? "Impression..." : "🖨 Imprimer étiquette"}
+          </button>
+        </div>
+
+        {!isPrepared ? (
+          <BigButton
+            icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
+            label="Marquer comme préparé"
+            sub={`${items.length} article(s)`}
+            color={C.green}
+            onClick={() => { markPrepared(p.id); setSelectedParcel({ ...p, _prepared: true }); }}
+          />
+        ) : (
+          <BigButton
+            icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
+            label="Annuler la préparation"
+            color={C.orange}
+            onClick={() => { unmarkPrepared(p.id); setSelectedParcel({ ...p, _prepared: false }); }}
+          />
+        )}
+      </>
+    );
+  }
+
+  // List view
+  return (
+    <>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onBack} style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: 8 }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={C.text} strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: C.text }}>E-shop</h2>
+            <p style={{ fontSize: 12, color: C.textMuted }}>{parcels.length} commande(s) SendCloud</p>
+          </div>
+        </div>
+        <button onClick={loadParcels} disabled={loading} style={{ ...iconBtn, background: C.blueSoft, borderRadius: 10, padding: "8px 12px" }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.blue} strokeWidth="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        </button>
+      </div>
+
+      {/* Filter tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
+        {([["pending", `À préparer (${pendingCount})`], ["prepared", `Préparées (${preparedCount})`], ["all", "Tout"]] as [string, string][]).map(([key, label]) => (
+          <button key={key} onClick={() => setFilter(key as any)} style={{
+            flex: 1, padding: "8px 0", border: `1.5px solid ${filter === key ? "#f59e0b" : C.border}`,
+            background: filter === key ? "#fef3c7" : C.white, color: filter === key ? "#92400e" : C.textSec,
+            borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {error && <Alert type="error">{error}</Alert>}
+      {loading && parcels.length === 0 && <div style={{ textAlign: "center", padding: 40, color: C.textMuted }}>Chargement des commandes SendCloud...</div>}
+      {!loading && parcels.length === 0 && <Alert type="info">Aucune commande trouvée. Vérifie les clés API SendCloud dans les variables Vercel.</Alert>}
+
+      {filteredParcels.map((p: any) => {
+        const isPrepared = preparedIds.has(p.id);
+        const items = p.parcel_items || [];
+        const statusMsg = p.status?.message || "";
+        return (
+          <div key={p.id} style={{ ...cardStyle, marginBottom: 8, borderLeft: `3px solid ${isPrepared ? C.green : "#f59e0b"}`, cursor: "pointer" }}
+            onClick={() => setSelectedParcel(p)}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
+                <div style={{ fontSize: 12, color: C.textSec }}>{p.name}</div>
+                <div style={{ fontSize: 11, color: C.textMuted }}>{p.postal_code} {p.city} · {p.country?.name || p.country_iso_2 || ""}</div>
+              </div>
+              <div style={{ textAlign: "right", flexShrink: 0 }}>
+                {isPrepared ? (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "2px 8px", borderRadius: 6 }}>✓ Préparé</span>
+                ) : (
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "2px 8px", borderRadius: 6 }}>{statusMsg || "En attente"}</span>
+                )}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              {items.length > 0 && <span style={{ fontSize: 10, color: C.textMuted, background: C.bg, padding: "2px 6px", borderRadius: 4 }}>{items.length} art.</span>}
+              {p.carrier?.code && <span style={{ fontSize: 10, color: "#7c3aed", background: "#f3e8ff", padding: "2px 6px", borderRadius: 4 }}>{p.carrier.code}</span>}
+              {p.tracking_number && <span style={{ fontSize: 10, color: C.textMuted, background: C.bg, padding: "2px 6px", borderRadius: 4 }}>📦 {p.tracking_number}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
 
 // ============================================
 // ARRIVAL SCREEN — Packing List Import
