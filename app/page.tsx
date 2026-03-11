@@ -2502,10 +2502,18 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const loadParcels = async () => {
     setLoading(true); setError("");
     try {
+      // Only fetch parcels that are ready to send (not already shipped/delivered)
+      // SendCloud status IDs: 1=Announced, 2=En route, 3=Delivered, 999=Ready to send, 1000=Ready to send (unfulfilled)
+      // We want "Ready to send" parcels — those with a label but not yet shipped
       const res = await fetch("/api/sendcloud?action=parcels&limit=200");
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || `Erreur ${res.status}`); }
       const data = await res.json();
-      const allParcels = data.parcels || [];
+      const allParcels = (data.parcels || []).filter((p: any) => {
+        const sid = p.status?.id;
+        // Keep only: 2=En route to sorting, 999=Ready to send, 1000=Ready to send, 1=Announced, 62=Registered
+        // Exclude: 3=Delivered, 4=Returned, 5=Cancelled, 11=Delivered, etc.
+        return sid && (sid === 999 || sid === 1000 || sid === 1 || sid === 2 || sid === 62);
+      });
       setParcels(allParcels);
 
       // Match product refs with Odoo
