@@ -3001,7 +3001,7 @@ function InventoryScreen({ session, onBack, onToast }: { session: any; onBack: (
             placeholder="Scanner ou taper Réf, lot, code-barres..."
             style={{ flex: 1, padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none" }}
           />
-          <button onClick={searchProducts} disabled={searching}
+          <button onClick={() => searchProducts()} disabled={searching}
             style={{ padding: "10px 16px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             {searching ? "..." : "OK"}
           </button>
