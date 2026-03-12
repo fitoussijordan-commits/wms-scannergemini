@@ -2328,7 +2328,13 @@ function LocationResult({ location, stock, onRename }: { location: any; stock: a
           )}
           <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{location.barcode || location.complete_name} · {stock.length} réf</div>
         </div>
-
+        {location.barcode && (
+          <button onClick={() => requestPrint({ type: "location", title: location.name, barcode: location.barcode, locationName: location.name })}
+            style={{ ...iconBtn, background: C.bg, borderRadius: 8, padding: "6px 10px", marginLeft: 8, flexShrink: 0 }}
+            title="Imprimer étiquette emplacement">
+            {printerIcon}
+          </button>
+        )}
       </div>
       {stock.map((q, i) => (
         <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: i < stock.length - 1 ? `1px solid ${C.border}` : "", fontSize: 12 }}>
@@ -2597,10 +2603,14 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // Detail view
   if (selectedParcel) {
     const p = selectedParcel;
+    const excludedSkus = getExcludedSkus();
     const items = (p.parcel_items || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
-      return val >= 0 && !sku.startsWith("offre_") && item.description !== "Bon de réduction";
+      // Exclude: negative values, promo/discount lines, user-excluded SKUs
+      if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
+      if (excludedSkus.some(ex => ex.toLowerCase() === sku || (item.sku && item.sku === ex))) return false;
+      return true;
     });
     const isPrepared = preparedIds.has(p.id);
 
@@ -3546,6 +3556,63 @@ function HistoryScreen({ history, onClear, onBack }: { history: HistoryEntry[]; 
 // ============================================
 // SETTINGS SCREEN
 // ============================================
+// ============================================
+// E-SHOP EXCLUDED SKUS (stored in localStorage)
+// ============================================
+const ESHOP_EXCLUDED_KEY = "wms_eshop_excluded_skus";
+
+function getExcludedSkus(): string[] {
+  try { const v = localStorage.getItem(ESHOP_EXCLUDED_KEY); return v ? JSON.parse(v) : []; } catch { return []; }
+}
+
+function saveExcludedSkus(skus: string[]) {
+  try { localStorage.setItem(ESHOP_EXCLUDED_KEY, JSON.stringify(skus)); } catch {}
+}
+
+function EshopExcludedSkus() {
+  const [skus, setSkus] = useState<string[]>(() => getExcludedSkus());
+  const [newSku, setNewSku] = useState("");
+
+  const add = () => {
+    const s = newSku.trim();
+    if (s && !skus.includes(s)) {
+      const updated = [...skus, s];
+      setSkus(updated);
+      saveExcludedSkus(updated);
+      setNewSku("");
+    }
+  };
+
+  const remove = (sku: string) => {
+    const updated = skus.filter(s => s !== sku);
+    setSkus(updated);
+    saveExcludedSkus(updated);
+  };
+
+  return (
+    <Section>
+      <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 8 }}>🛒 E-shop — Articles exclus</div>
+      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 10 }}>
+        Ces SKU ne seront pas affichés dans la préparation e-shop (échantillons, articles hors stock, etc.)
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        <input value={newSku} onChange={e => setNewSku(e.target.value)}
+          onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") add(); }}
+          placeholder="SKU à exclure..."
+          style={{ flex: 1, padding: "8px 10px", border: `1.5px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: "inherit", outline: "none" }} />
+        <button onClick={add} style={{ padding: "8px 14px", background: C.blue, color: "#fff", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>+</button>
+      </div>
+      {skus.length === 0 && <div style={{ fontSize: 11, color: C.textMuted }}>Aucun SKU exclu</div>}
+      {skus.map(sku => (
+        <div key={sku} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: C.text, fontFamily: "monospace" }}>{sku}</span>
+          <button onClick={() => remove(sku)} style={{ background: "none", border: "none", color: C.red, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✕</button>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
 function SettingsScreen({ onBack }: { onBack: () => void }) {
   const [printers, setPrinters] = useState<pn.PrintNodePrinter[]>([]);
   const [loadingP, setLoadingP] = useState(false);
@@ -3742,6 +3809,9 @@ function SettingsScreen({ onBack }: { onBack: () => void }) {
           color: msg.startsWith("✓") ? C.green : msg.startsWith("✕") || msg.startsWith("⚠") ? C.red : C.textSec,
         }}>{msg}</div>
       )}
+
+      {/* E-shop excluded SKUs */}
+      <EshopExcludedSkus />
     </>
   );
 }
