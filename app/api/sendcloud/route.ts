@@ -166,8 +166,6 @@ export async function GET(req: NextRequest) {
       // JSON response — log it to understand structure
       const psJson = await psRes.json().catch(() => null);
       return NextResponse.json({ debug: psJson, parcelId: parcel.id });
-      }
-      return NextResponse.json({ error: `BL introuvable pour colis ${parcel.id}`, parcelId: parcel.id }, { status: 404 });
     }
 
     // Debug — show all distinct statuses and try multiple endpoints
