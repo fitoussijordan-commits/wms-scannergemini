@@ -68,7 +68,9 @@ export async function GET(req: NextRequest) {
         keys: Object.keys(data), 
         count: data.count ?? data.total ?? "?",
         sample: (data.data || data.results || data.orders || []).slice(0, 2),
-        first_order_keys: Object.keys((data.data || data.results || data.orders || [])[0] || {})
+        first_order_keys: Object.keys((data.data || data.results || data.orders || [])[0] || {}),
+        order_details_keys: Object.keys((data.data || data.results || data.orders || [])[0]?.order_details || {}),
+        has_order_items_in_details: !!(data.data || data.results || data.orders || [])[0]?.order_details?.order_items
       });
     }
 

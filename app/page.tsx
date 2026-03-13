@@ -2523,7 +2523,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         country: { name: o.shipping_address?.country_code || "" },
         email: o.shipping_address?.email || "",
         telephone: o.shipping_address?.phone_number || "",
-        parcel_items: (o.order_items || []).map((item: any) => ({
+        parcel_items: (o.order_items || o.order_details?.order_items || []).map((item: any) => ({
           sku: item.sku,
           description: item.name,
           quantity: item.quantity,
