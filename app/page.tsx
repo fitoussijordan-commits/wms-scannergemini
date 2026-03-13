@@ -2493,30 +2493,25 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [selectedParcel, setSelectedParcel] = useState<any>(null);
   const [matchData, setMatchData] = useState<Record<string, any>>({});
   const [locationData, setLocationData] = useState<Record<number, any>>({});
-  const [preparedIds, setPreparedIds] = useState<Set<number>>(() => {
-    try { const v = localStorage.getItem("wms_eshop_prepared"); return v ? new Set(JSON.parse(v)) : new Set(); } catch { return new Set(); }
-  });
+  const [preparedIds, setPreparedIds] = useState<Set<number>>(new Set());
   const [printing, setPrinting] = useState(false);
   const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
   const [chariotSkus, setChariotSkus] = useState<string[]>(() => getChariotSkusLocal());
 
-  const savePrepared = (ids: Set<number>) => {
+  const savePrepared = async (ids: Set<number>) => {
     setPreparedIds(ids);
-    try { localStorage.setItem("wms_eshop_prepared", JSON.stringify(Array.from(ids))); } catch {}
+    try { await odoo.setConfigParam(session, "wms_eshop_prepared", JSON.stringify(Array.from(ids))); } catch {}
   };
 
   // Load orders from SendCloud V3
-  // Load chariot SKUs from Odoo on mount
+  // Load shared state from Odoo on mount
   useEffect(() => {
     if (!session) return;
     odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
-      if (val) {
-        try {
-          const parsed = JSON.parse(val);
-          setChariotSkus(parsed);
-          setChariotSkusLocal(parsed);
-        } catch {}
-      }
+      if (val) { try { const p = JSON.parse(val); setChariotSkus(p); setChariotSkusLocal(p); } catch {} }
+    });
+    odoo.getConfigParam(session, "wms_eshop_prepared").then(val => {
+      if (val) { try { setPreparedIds(new Set(JSON.parse(val))); } catch {} }
     });
   }, [session]);
 
@@ -2626,7 +2621,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     setPrinting(false);
   };
 
-  const markPrepared = (parcelId: number) => {
+  const markPrepared = async (parcelId: number) => {
     const newSet = new Set(Array.from(preparedIds));
     newSet.add(parcelId);
     savePrepared(newSet);
@@ -2634,7 +2629,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     onToast("✓ Marqué préparé");
   };
 
-  const unmarkPrepared = (parcelId: number) => {
+  const unmarkPrepared = async (parcelId: number) => {
     const newSet = new Set(Array.from(preparedIds));
     newSet.delete(parcelId);
     savePrepared(newSet);
@@ -2716,6 +2711,13 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
     }));
     const isPrepared = preparedIds.has(p.id);
+
+    // Sort items by location for optimal picking path
+    items.sort((a: any, b: any) => {
+      const locA = getLocation(a.sku)?.location_name || "zzz";
+      const locB = getLocation(b.sku)?.location_name || "zzz";
+      return locA.localeCompare(locB);
+    });
 
     // For each item: qty required vs qty scanned (chariot items auto-validated)
     const getScanned = (item: any) => item._isChariot ? (item.quantity || 1) : (scannedSkus[item.sku] || 0);
@@ -2868,7 +2870,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             sub={allScanned ? `${items.length} article(s) tous scannés` : `${items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/${items.length} scannés`}
             color={allScanned ? C.green : C.orange}
             onClick={async () => {
-              markPrepared(p.id);
+              await markPrepared(p.id);
               setSelectedParcel(null);
               onToast("⏳ Impression étiquette + BL...");
               await printLabel(p);
@@ -2881,7 +2883,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
             label="Annuler la préparation"
             color={C.orange}
-            onClick={() => { unmarkPrepared(p.id); setSelectedParcel(null); }}
+            onClick={async () => { await unmarkPrepared(p.id); setSelectedParcel(null); }}
           />
         )}
       </>
