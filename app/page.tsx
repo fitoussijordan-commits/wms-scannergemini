@@ -2532,8 +2532,10 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
         _raw: o,
       }));
-      // Filter: only Colissimo / Mondial Relay (exclude Unstamped letter etc.)
+      // Filter: status "Ouvert" (code "0") + exclude Unstamped letter
       const allowedParcels = allParcels.filter((o: any) => {
+        const statusCode = o._raw?.order_details?.status?.code ?? o._raw?.status?.code;
+        if (statusCode !== "0") return false;
         const delivery = (o._raw?.shipping_details?.delivery_indicator || "").toLowerCase();
         return !delivery.includes("unstamped") && !delivery.includes("letter") && !delivery.includes("briefmarke");
       });
