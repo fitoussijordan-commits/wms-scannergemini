@@ -2511,12 +2511,32 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       const res = await fetch("/api/sendcloud?action=orders");
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || `Erreur ${res.status}`); }
       const data = await res.json();
-      const allParcels = data.orders || [];
+      // Normalize V3 order structure to match UI expectations
+      const allParcels = (data.orders || []).map((o: any) => ({
+        id: o.id,
+        order_number: o.order_number,
+        name: o.shipping_address?.name || "",
+        company_name: o.shipping_address?.company_name || "",
+        address: [o.shipping_address?.address_line_1, o.shipping_address?.house_number].filter(Boolean).join(" "),
+        postal_code: o.shipping_address?.postal_code || "",
+        city: o.shipping_address?.city || "",
+        country: { name: o.shipping_address?.country_code || "" },
+        email: o.shipping_address?.email || "",
+        telephone: o.shipping_address?.phone_number || "",
+        parcel_items: (o.order_items || []).map((item: any) => ({
+          sku: item.sku,
+          description: item.name,
+          quantity: item.quantity,
+          value: item.unit_price?.value ?? 0,
+        })),
+        status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
+        _raw: o,
+      }));
       setParcels(allParcels);
 
-      // Match product refs with Odoo — V3 uses order.lines[].sku
+      // Match SKUs with Odoo
       const allRefs = Array.from(new Set(
-        allParcels.flatMap((o: any) => (o.lines || o.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
+        allParcels.flatMap((p: any) => (p.parcel_items || []).map((item: any) => item.sku)).filter(Boolean)
       )) as string[];
       if (allRefs.length > 0 && session) {
         const matches = await odoo.matchSupplierRefs(session, allRefs);
@@ -2599,7 +2619,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   if (selectedParcel) {
     const p = selectedParcel;
     const chariotSkus = getChariotSkusLocal();
-    const items = (p.lines || p.parcel_items || []).filter((item: any) => {
+    const items = (p.parcel_items || p.lines || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
       // Exclude: negative values, promo/discount lines
@@ -2750,7 +2770,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
 
       {filteredParcels.map((p: any) => {
         const isPrepared = preparedIds.has(p.id);
-        const items = p.lines || p.parcel_items || [];
+        const items = p.parcel_items || p.lines || [];
         const statusMsg = p.status?.message || "";
         return (
           <div key={p.id} style={{ ...cardStyle, marginBottom: 8, borderLeft: `3px solid ${isPrepared ? C.green : "#f59e0b"}`, cursor: "pointer" }}
