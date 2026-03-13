@@ -1,6 +1,8 @@
 // app/api/sendcloud/route.ts — Server-side proxy for SendCloud API
 import { NextRequest, NextResponse } from "next/server";
 
+export const maxDuration = 30;
+
 const V2 = "https://panel.sendcloud.sc/api/v2";
 const V3 = "https://panel.sendcloud.sc/api/v3";
 
@@ -107,14 +109,19 @@ export async function GET(req: NextRequest) {
             orders: [{ order_number: orderNumber }],
           }),
         });
-        // Poll V2 for parcel
-        for (let i = 0; i < 10; i++) {
+        // Poll V2 max 3x with 2s gap (stay under Vercel 10s limit)
+        for (let i = 0; i < 3; i++) {
           await new Promise(r => setTimeout(r, 2000));
           const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
           const list = parcelsData.parcels || [];
           if (list.length > 0 && (list[0]?.label?.label_printer || list[0]?.label?.normal_printer?.[0])) {
             parcel = list[0]; break;
           }
+        }
+        // If still no label, return parcel id for retry
+        if (!parcel) {
+          const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+          parcel = (parcelsData.parcels || [])[0] || null;
         }
       }
 
