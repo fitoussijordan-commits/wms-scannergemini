@@ -131,26 +131,35 @@ export async function GET(req: NextRequest) {
     if (action === "packingslip") {
       const orderNumber = searchParams.get("order_number");
       if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
-      // V2 packing-slips endpoint — try with normal_printer format
-      const psRes = await scFetch(`${V2}/packing-slips?order_number=${orderNumber}&format=normal_printer`, auth);
-      if (!psRes.ok) {
-        const errText = await psRes.text().catch(() => "");
-        return NextResponse.json({ error: `Erreur packing slip ${psRes.status}: ${errText.substring(0, 200)}` }, { status: psRes.status });
+      // Find parcel first, then get packing slip from parcel label
+      const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+      const parcel = (parcelsData.parcels || [])[0];
+      if (!parcel) return NextResponse.json({ error: `Aucun colis trouvé pour ${orderNumber}` }, { status: 404 });
+
+      // Packing slip URL is on the parcel object
+      const psUrl = parcel?.label?.normal_printer?.[0]
+        || parcel?.label?.label_printer
+        || parcel?.documents?.find((d: any) => d.type === "packing-slip")?.link;
+
+      // Fallback: try dedicated endpoint with parcel id
+      const tryUrls = [
+        psUrl,
+        `${V2}/packing-slips?parcel_id=${parcel.id}`,
+        `https://panel.sendcloud.sc/api/v2/packing-slips/${parcel.id}`,
+      ].filter(Boolean);
+
+      for (const url of tryUrls) {
+        const res = await scFetch(url, auth);
+        if (!res.ok) continue;
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("pdf")) {
+          const pdfBuffer = Buffer.from(await res.arrayBuffer());
+          return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
+        }
+        const json = await res.json().catch(() => null);
+        if (json) return NextResponse.json({ debug: json, parcelId: parcel.id });
       }
-      const contentType = psRes.headers.get("content-type") || "";
-      if (contentType.includes("application/pdf")) {
-        // Direct PDF response
-        const pdfBuffer = Buffer.from(await psRes.arrayBuffer());
-        return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
-      }
-      // JSON response with URL
-      const psData = await psRes.json();
-      const pdfUrl = psData?.normal_printer || psData?.label?.normal_printer?.[0] || psData?.url;
-      if (!pdfUrl) return NextResponse.json({ error: `BL non disponible: ${JSON.stringify(psData).substring(0, 200)}` }, { status: 404 });
-      const pdfRes = await scFetch(pdfUrl, auth);
-      if (!pdfRes.ok) return NextResponse.json({ error: `Erreur téléchargement BL: ${pdfRes.status}` }, { status: pdfRes.status });
-      const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
-      return NextResponse.json({ pdfBase64: pdfBuffer.toString("base64") });
+      return NextResponse.json({ error: `BL introuvable pour colis ${parcel.id}`, parcelId: parcel.id }, { status: 404 });
     }
 
     // Debug — show all distinct statuses and try multiple endpoints
