@@ -2532,7 +2532,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         status: { id: 1000, message: o.order_details?.status?.message || "Ouvert" },
         _raw: o,
       }));
-      setParcels(allParcels);
+      // Filter: only Colissimo / Mondial Relay (exclude Unstamped letter etc.)
+      const allowedParcels = allParcels.filter((o: any) => {
+        const delivery = (o._raw?.shipping_details?.delivery_indicator || "").toLowerCase();
+        return !delivery.includes("unstamped") && !delivery.includes("letter") && !delivery.includes("briefmarke");
+      });
+      setParcels(allowedParcels);
 
       // Match SKUs with Odoo
       const allRefs = Array.from(new Set(
@@ -2618,6 +2623,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // Detail view
   if (selectedParcel) {
     const p = selectedParcel;
+    console.log("[eshop] parcel_items:", p.parcel_items);
     const chariotSkus = getChariotSkusLocal();
     const items = (p.parcel_items || p.lines || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
