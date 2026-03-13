@@ -2883,12 +2883,12 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
             sub={allScanned ? `${items.length} article(s) tous scannés` : `${items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/${items.length} scannés`}
             color={allScanned ? C.green : C.orange}
             onClick={async () => {
-              await markPrepared(p.id);
-              setSelectedParcel(null);
               onToast("⏳ Impression étiquette + BL...");
               await printLabel(p);
               await printPackingSlip(p.order_number);
-              onToast("✓ Étiquette + BL imprimés");
+              await markPrepared(p.id);
+              setSelectedParcel(null);
+              onToast("✓ Préparation confirmée");
             }}
           />
         ) : (

@@ -88,28 +88,36 @@ export async function GET(req: NextRequest) {
     if (action === "label") {
       const orderId = searchParams.get("order_id");
       const orderNumber = searchParams.get("order_number");
-      if (!orderId) return NextResponse.json({ error: "order_id requis" }, { status: 400 });
+      if (!orderId || !orderNumber) return NextResponse.json({ error: "order_id et order_number requis" }, { status: 400 });
 
-      // Step 1: create label via V3 async
-      const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
-        method: "POST",
-        body: JSON.stringify({
-          integration_id: 527093,
-          orders: [{ order_number: orderNumber }],
-        }),
-      });
-
-      // parcel_id may come back directly or need polling
-      let parcelId = (createRes?.data || [])[0]?.parcel_id;
-
-      // Step 2: poll V2 for parcel if not returned immediately
+      // Step 1: check if parcel already exists
       let parcel: any = null;
-      for (let i = 0; i < 10; i++) {
-        await new Promise(r => setTimeout(r, 2000));
-        const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
-        const list = parcelsData.parcels || [];
-        if (list.length > 0) { parcel = list[0]; break; }
+      const existingData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+      const existing = (existingData.parcels || [])[0];
+      if (existing?.label?.label_printer || existing?.label?.normal_printer?.[0]) {
+        parcel = existing;
       }
+
+      // Step 2: create label only if not already exists
+      if (!parcel) {
+        await scJson(`${V3}/orders/create-labels-async`, auth, {
+          method: "POST",
+          body: JSON.stringify({
+            integration_id: 527093,
+            orders: [{ order_number: orderNumber }],
+          }),
+        });
+        // Poll V2 for parcel
+        for (let i = 0; i < 10; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+          const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+          const list = parcelsData.parcels || [];
+          if (list.length > 0 && (list[0]?.label?.label_printer || list[0]?.label?.normal_printer?.[0])) {
+            parcel = list[0]; break;
+          }
+        }
+      }
+
       if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
