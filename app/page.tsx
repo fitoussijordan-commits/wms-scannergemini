@@ -3765,7 +3765,7 @@ function EshopChariotSkus({ session }: { session: any }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   // Use ref to always have latest skus for Odoo save even if component unmounts
-  const skusRef = React.useRef<string[]>([]);
+  const skusRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!session) return;
