@@ -115,8 +115,7 @@ async function generateEshopPackingSlipPDF(order: {
   // "Numéro de commande" label
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
-  doc.text("Numéro de
-commande", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.text("Numéro de\ncommande", col1X + 3, iy, { lineHeightFactor: 1.4 });
   // Expéditeur continued
   doc.setFont("helvetica", "normal");
   doc.text("+33143553242", col2X + 3, iy);
@@ -133,8 +132,7 @@ commande", col1X + 3, iy, { lineHeightFactor: 1.4 });
 
   // Shipping method label
   doc.setFont("helvetica", "bold");
-  doc.text("Méthode
-d'expédition", col1X + 3, iy, { lineHeightFactor: 1.4 });
+  doc.text("Méthode\nd'expédition", col1X + 3, iy, { lineHeightFactor: 1.4 });
   doc.setFont("helvetica", "normal");
   doc.text("75010", col2X + 3, iy);
   doc.text(order.recipient_city, col3X + 3, iy);
