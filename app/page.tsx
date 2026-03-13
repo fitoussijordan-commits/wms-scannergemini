@@ -2496,7 +2496,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [preparedIds, setPreparedIds] = useState<Set<number>>(new Set());
   const [printing, setPrinting] = useState(false);
   const [filter, setFilter] = useState<"pending" | "prepared" | "all">("pending");
-  const [chariotSkus, setChariotSkus] = useState<string[]>(() => getChariotSkusLocal());
+  const [chariotSkus, setChariotSkus] = useState<string[]>([]);
+  const [chariotLoaded, setChariotLoaded] = useState(false);
 
   const savePrepared = async (ids: Set<number>) => {
     setPreparedIds(ids);
@@ -2509,7 +2510,8 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
     if (!session) return;
     odoo.getConfigParam(session, "wms_eshop_chariot_skus").then(val => {
       if (val) { try { const p = JSON.parse(val); setChariotSkus(p); setChariotSkusLocal(p); } catch {} }
-    });
+      setChariotLoaded(true);
+    }).catch(() => setChariotLoaded(true));
     odoo.getConfigParam(session, "wms_eshop_prepared").then(val => {
       if (val) { try { setPreparedIds(new Set(JSON.parse(val))); } catch {} }
     });
@@ -2657,9 +2659,16 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const [scanError, setScanError] = useState("");
 
   // Reset scan state when opening a new parcel
-  const openParcel = (p: any) => {
+  const openParcel = async (p: any) => {
     setScannedSkus({});
     setScanError("");
+    // Refresh chariot SKUs from Odoo each time we open a parcel
+    if (session) {
+      try {
+        const val = await odoo.getConfigParam(session, "wms_eshop_chariot_skus");
+        if (val) { const parsed = JSON.parse(val); setChariotSkus(parsed); setChariotSkusLocal(parsed); }
+      } catch {}
+    }
     setSelectedParcel(p);
   };
 
@@ -3751,7 +3760,7 @@ function setChariotSkusLocal(skus: string[]) {
 }
 
 function EshopChariotSkus({ session }: { session: any }) {
-  const [skus, setSkus] = useState<string[]>(() => getChariotSkusLocal());
+  const [skus, setSkus] = useState<string[]>([]);
   const [newSku, setNewSku] = useState("");
   const [saving, setSaving] = useState(false);
 
