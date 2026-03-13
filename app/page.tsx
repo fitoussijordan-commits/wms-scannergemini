@@ -2640,14 +2640,58 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   const pendingCount = parcels.filter(p => !preparedIds.has(p.id)).length;
   const preparedCount = parcels.filter(p => preparedIds.has(p.id)).length;
 
-  // Detail view
-  if (selectedParcel) {
+  // Detail view — scan-based preparation
+  const [scannedSkus, setScannedSkus] = useState<Record<string, number>>({});
+  const [scanError, setScanError] = useState("");
+
+  // Reset scan state when opening a new parcel
+  const openParcel = (p: any) => {
+    setScannedSkus({});
+    setScanError("");
+    setSelectedParcel(p);
+  };
+
+  const handleEshopScan = (code: string) => {
+    if (!selectedParcel) return;
     const p = selectedParcel;
-    console.log("[eshop] parcel_items:", p.parcel_items, "order_items:", p._raw?.order_items, "full:", JSON.stringify(p).substring(0, 300));
     const items = (p.parcel_items || p.lines || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
       const sku = (item.sku || "").toLowerCase();
-      // Exclude: negative values, promo/discount lines
+      if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
+      return true;
+    }).map((item: any) => ({
+      ...item,
+      _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
+    }));
+    setScanError("");
+    const trimmed = code.trim();
+    const matched = items.find((item: any) => {
+      const match = getMatch(item.sku);
+      return item.sku === trimmed || match?.default_code === trimmed || match?.barcode === trimmed;
+    });
+    if (!matched) {
+      setScanError(`❌ "${trimmed}" — article non trouvé dans cette commande`);
+      vibrateError();
+      return;
+    }
+    const required = matched.quantity || 1;
+    const current = scannedSkus[matched.sku] || 0;
+    if (current >= required) {
+      setScanError(`⚠ "${matched.description || matched.sku}" déjà scanné (${required}/${required})`);
+      return;
+    }
+    const newCount = current + 1;
+    setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
+    if (newCount >= required) { vibrateSuccess(); onToast(`✓ ${matched.description || matched.sku}`); }
+  };
+
+  useScannerListener(handleEshopScan, !!selectedParcel && !preparedIds.has(selectedParcel?.id));
+
+  if (selectedParcel) {
+    const p = selectedParcel;
+    const items = (p.parcel_items || p.lines || []).filter((item: any) => {
+      const val = parseFloat(item.value || "0");
+      const sku = (item.sku || "").toLowerCase();
       if (val < 0 || sku.startsWith("offre_") || item.description === "Bon de réduction") return false;
       return true;
     }).map((item: any) => ({
@@ -2655,6 +2699,40 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
       _isChariot: chariotSkus.some(ex => ex.toLowerCase() === (item.sku || "").toLowerCase()),
     }));
     const isPrepared = preparedIds.has(p.id);
+
+    // For each item: qty required vs qty scanned (chariot items auto-validated)
+    const getScanned = (item: any) => item._isChariot ? (item.quantity || 1) : (scannedSkus[item.sku] || 0);
+    const allScanned = items.length > 0 && items.every((item: any) => getScanned(item) >= (item.quantity || 1));
+
+    // Scan handler — match by SKU or Odoo default_code or barcode
+    const handleScan = (code: string) => {
+      setScanError("");
+      const trimmed = code.trim();
+      // Find item by SKU or odoo ref
+      const matched = items.find((item: any) => {
+        const match = getMatch(item.sku);
+        return item.sku === trimmed
+          || match?.default_code === trimmed
+          || match?.barcode === trimmed;
+      });
+      if (!matched) {
+        setScanError(`❌ "${trimmed}" — article non trouvé dans cette commande`);
+        vibrateError();
+        return;
+      }
+      const required = matched.quantity || 1;
+      const current = scannedSkus[matched.sku] || 0;
+      if (current >= required) {
+        setScanError(`⚠ "${matched.description || matched.sku}" déjà scanné (${required}/${required})`);
+        return;
+      }
+      const newCount = current + 1;
+      setScannedSkus(prev => ({ ...prev, [matched.sku]: newCount }));
+      if (newCount >= required) {
+        vibrateSuccess();
+        onToast(`✓ ${matched.description || matched.sku}`);
+      }
+    };
 
     return (
       <>
@@ -2664,41 +2742,59 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
           </button>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
-            <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.address?.replace(/\n/g, ", ") || `${p.city}, ${p.country?.name || ""}`}</div>
+            <div style={{ fontSize: 12, color: C.textSec }}>{p.name} — {p.city}</div>
           </div>
-          {isPrepared && <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>Préparé</span>}
+          {isPrepared
+            ? <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>✓ Préparé</span>
+            : allScanned
+              ? <span style={{ fontSize: 11, fontWeight: 700, color: C.green, background: C.greenSoft, padding: "3px 8px", borderRadius: 6 }}>✓ Prêt</span>
+              : <span style={{ fontSize: 11, fontWeight: 700, color: C.orange, background: C.orangeSoft, padding: "3px 8px", borderRadius: 6 }}>{items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/{items.length} scannés</span>
+          }
         </div>
 
         {/* Customer info */}
         <Section>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>Client</div>
           <div style={{ fontSize: 12, color: C.textSec }}>
             <div style={{ fontWeight: 600 }}>{p.name}</div>
             {p.company_name && <div>{p.company_name}</div>}
-            <div>{p.address} {p.house_number}</div>
+            <div>{p.address}</div>
             <div>{p.postal_code} {p.city}</div>
-            <div>{p.country?.name || p.country_iso_2 || ""}</div>
             {p.email && <div style={{ color: C.blue, marginTop: 4 }}>{p.email}</div>}
             {p.telephone && <div>{p.telephone}</div>}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            {p.carrier?.code && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>🚚 {p.carrier.code}</span>}
-            {p.tracking_number && <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>📦 {p.tracking_number}</span>}
-            {p.weight && <span style={{ fontSize: 11, color: C.textMuted, background: C.bg, padding: "2px 8px", borderRadius: 6 }}>{p.weight} kg</span>}
+          <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            {p._raw?.shipping_details?.delivery_indicator && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "2px 8px", borderRadius: 6 }}>
+                🚚 {p._raw.shipping_details.delivery_indicator}
+              </span>
+            )}
           </div>
         </Section>
 
-        {/* Products to pick */}
+        {/* Articles */}
         <Section>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>Articles à préparer</div>
           {items.length === 0 && <div style={{ fontSize: 12, color: C.textMuted }}>Aucun article détaillé</div>}
           {items.map((item: any, i: number) => {
             const match = getMatch(item.sku);
             const loc = getLocation(item.sku);
+            const required = item.quantity || 1;
+            const scanned = getScanned(item);
+            const done = scanned >= required;
             return (
-              <div key={i} style={{ padding: "10px 0", borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "", display: "flex", gap: 10, alignItems: "flex-start" }}>
-                <div style={{ width: 36, height: 36, borderRadius: 8, background: loc ? C.greenSoft : C.orangeSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 16 }}>
-                  {loc ? "📍" : "❓"}
+              <div key={i} style={{
+                padding: "10px 0",
+                borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "",
+                display: "flex", gap: 10, alignItems: "flex-start",
+                opacity: done ? 0.6 : 1,
+              }}>
+                {/* Status icon */}
+                <div style={{
+                  width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                  background: done ? C.greenSoft : C.bgSec,
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+                }}>
+                  {done ? "✅" : item._isChariot ? "🛒" : "⬜"}
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{match?.product_name || item.description || item.sku}</div>
@@ -2707,9 +2803,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                     {match?.default_code && <span> · Réf: {match.default_code}</span>}
                   </div>
                   {item._isChariot ? (
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", marginTop: 4 }}>
-                      🛒 Chariot Eshop
-                    </div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", marginTop: 4 }}>🛒 Chariot Eshop</div>
                   ) : loc ? (
                     <div style={{ fontSize: 11, fontWeight: 600, color: "#059669", marginTop: 4 }}>
                       📍 {loc.location_name} <span style={{ fontWeight: 400, color: C.textMuted }}>({loc.quantity} en stock)</span>
@@ -2717,19 +2811,29 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
                   ) : match ? (
                     <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Pas de stock trouvé</div>
                   ) : null}
-                  {!match && item.sku && (
-                    <div style={{ fontSize: 11, color: C.orange, marginTop: 4 }}>⚠ Réf non trouvée dans Odoo</div>
-                  )}
                 </div>
+                {/* Qty counter */}
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{item.quantity || 1}</div>
-                  <div style={{ fontSize: 10, color: C.textMuted }}>pcs</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: done ? C.green : C.text }}>
+                    {scanned}<span style={{ fontSize: 12, color: C.textMuted }}>/{required}</span>
+                  </div>
+                  {!done && !item._isChariot && !isPrepared && (
+                    <button onClick={() => handleEshopScan(item.sku)}
+                      style={{ fontSize: 10, color: C.blue, background: C.blueSoft, border: "none", borderRadius: 4, padding: "2px 6px", cursor: "pointer", marginTop: 2, fontFamily: "inherit" }}>
+                      +1
+                    </button>
+                  )}
                 </div>
               </div>
             );
           })}
         </Section>
 
+        {scanError && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 8, fontSize: 12, color: "#dc2626" }}>
+            {scanError}
+          </div>
+        )}
         {error && <Alert type="error">{error}</Alert>}
 
         {/* Actions */}
@@ -2743,17 +2847,17 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         {!isPrepared ? (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>}
-            label="Marquer comme préparé"
-            sub={`${items.length} article(s)`}
-            color={C.green}
-            onClick={() => { markPrepared(p.id); setSelectedParcel({ ...p, _prepared: true }); }}
+            label={allScanned ? "Confirmer la préparation" : "Forcer comme préparé"}
+            sub={allScanned ? `${items.length} article(s) tous scannés` : `${items.filter((it: any) => getScanned(it) >= (it.quantity || 1)).length}/${items.length} scannés`}
+            color={allScanned ? C.green : C.orange}
+            onClick={() => { markPrepared(p.id); setSelectedParcel(null); }}
           />
         ) : (
           <BigButton
             icon={<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
             label="Annuler la préparation"
             color={C.orange}
-            onClick={() => { unmarkPrepared(p.id); setSelectedParcel({ ...p, _prepared: false }); }}
+            onClick={() => { unmarkPrepared(p.id); setSelectedParcel(null); }}
           />
         )}
       </>
@@ -2799,7 +2903,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
         const statusMsg = p.status?.message || "";
         return (
           <div key={p.id} style={{ ...cardStyle, marginBottom: 8, borderLeft: `3px solid ${isPrepared ? C.green : "#f59e0b"}`, cursor: "pointer" }}
-            onClick={() => setSelectedParcel(p)}>
+            onClick={() => openParcel(p)}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{p.order_number || `#${p.id}`}</div>
