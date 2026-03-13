@@ -90,29 +90,30 @@ export async function GET(req: NextRequest) {
       const orderNumber = searchParams.get("order_number");
       if (!orderId) return NextResponse.json({ error: "order_id requis" }, { status: 400 });
 
-      // Step 1: create label via V3 async — JSON:API format required
+      // Step 1: create label via V3 async
       const createRes = await scJson(`${V3}/orders/create-labels-async`, auth, {
         method: "POST",
         body: JSON.stringify({
-          data: {
-            type: "label",
-            attributes: {
-              integration_id: 527093,
-              order_ids: [parseInt(orderId)],
-            }
-          }
+          integration_id: 527093,
+          orders: [{ order_number: orderNumber }],
         }),
       });
 
-      // Step 2: find the parcel via V2 by order_number
-      await new Promise(r => setTimeout(r, 2000)); // wait for async label creation
-      const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
-      const parcels = parcelsData.parcels || [];
-      const parcel = parcels[0];
+      // parcel_id may come back directly or need polling
+      let parcelId = (createRes?.data || [])[0]?.parcel_id;
+
+      // Step 2: poll V2 for parcel if not returned immediately
+      let parcel: any = null;
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+        const list = parcelsData.parcels || [];
+        if (list.length > 0) { parcel = list[0]; break; }
+      }
       if (!parcel) return NextResponse.json({ error: "Colis non trouvé après création étiquette" }, { status: 404 });
 
       const labelUrl = parcel?.label?.label_printer || parcel?.label?.normal_printer?.[0];
-      if (!labelUrl) return NextResponse.json({ error: "Étiquette non disponible (création en cours?)" }, { status: 404 });
+      if (!labelUrl) return NextResponse.json({ error: "Étiquette non disponible" }, { status: 404 });
 
       const labelRes = await scFetch(labelUrl, auth);
       if (!labelRes.ok) return NextResponse.json({ error: `Erreur étiquette: ${labelRes.status}` }, { status: labelRes.status });
