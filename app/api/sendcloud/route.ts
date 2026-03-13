@@ -45,26 +45,30 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ parcels });
     }
 
-    // V3: probe multiple endpoints to find open orders
+    // V3 orders — open orders not yet converted to parcels
+    if (action === "orders") {
+      // /api/v3/orders returns {data: [...]} with open orders from Shopware integration
+      const data = await scJson(`${V3}/orders?integration_id=527093&page_size=100`, auth);
+      const orders = data.data || data.results || data.orders || [];
+      return NextResponse.json({ orders });
+    }
+
+    // V3 order detail
+    if (action === "order") {
+      const id = searchParams.get("id");
+      if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
+      const data = await scJson(`${V3}/orders/${id}`, auth);
+      return NextResponse.json({ order: data.data || data });
+    }
+
+    // Debug V3 orders structure
     if (action === "probe") {
-      const results: any = {};
-      const endpoints = [
-        "/parcels",
-        "/orders",
-        "/shipping/orders",
-        "/shipments",
-        "/shipping/shipments",
-        "/outgoing/orders",
-      ];
-      for (const ep of endpoints) {
-        try {
-          const data = await scJson(`${V3}${ep}?page_size=3`, auth);
-          results[ep] = { ok: true, keys: Object.keys(data), count: data.count ?? data.total ?? (Array.isArray(data) ? data.length : "?") };
-        } catch (e: any) {
-          results[ep] = { ok: false, error: e.message.substring(0, 100) };
-        }
-      }
-      return NextResponse.json(results);
+      const data = await scJson(`${V3}/orders?integration_id=527093&page_size=3`, auth);
+      return NextResponse.json({ 
+        keys: Object.keys(data), 
+        count: data.count ?? data.total ?? "?",
+        sample: (data.data || data.results || data.orders || []).slice(0, 2)
+      });
     }
 
     // Get label PDF for a parcel
