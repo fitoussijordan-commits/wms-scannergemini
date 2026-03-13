@@ -45,19 +45,26 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ parcels });
     }
 
-    // V3: open orders (statut "ouvert" / non encore expédiés)
-    if (action === "orders") {
-      const page = searchParams.get("page") || "1";
-      const data = await scJson(`${V3}/shipping/orders?integration_id=527093&page_size=100&page=${page}`, auth);
-      return NextResponse.json({ orders: data.results || [], count: data.count || 0 });
-    }
-
-    // V3: single order details
-    if (action === "order") {
-      const id = searchParams.get("id");
-      if (!id) return NextResponse.json({ error: "id requis" }, { status: 400 });
-      const data = await scJson(`${V3}/shipping/orders/${id}`, auth);
-      return NextResponse.json({ order: data });
+    // V3: probe multiple endpoints to find open orders
+    if (action === "probe") {
+      const results: any = {};
+      const endpoints = [
+        "/parcels",
+        "/orders",
+        "/shipping/orders",
+        "/shipments",
+        "/shipping/shipments",
+        "/outgoing/orders",
+      ];
+      for (const ep of endpoints) {
+        try {
+          const data = await scJson(`${V3}${ep}?page_size=3`, auth);
+          results[ep] = { ok: true, keys: Object.keys(data), count: data.count ?? data.total ?? (Array.isArray(data) ? data.length : "?") };
+        } catch (e: any) {
+          results[ep] = { ok: false, error: e.message.substring(0, 100) };
+        }
+      }
+      return NextResponse.json(results);
     }
 
     // Get label PDF for a parcel
