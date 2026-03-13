@@ -1023,7 +1023,9 @@ export default function Page() {
             <div style={{ height: 10 }} />
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>} label="Arrivage" sub="Importer une packing list WALA" color="#059669" onClick={() => setScreen("arrival")} />
             <div style={{ height: 10 }} />
+            {/* HIDDEN: E-shop button — pas au point
             <BigButton icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>} label="E-shop" sub="Préparer les commandes SendCloud" color="#f59e0b" onClick={() => setScreen("eshop")} />
+            */}
             {history.length > 0 && <>
               <div style={{ height: 10 }} />
               <BigButton icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>} label="Historique" sub={`${history.length} transfert${history.length > 1 ? "s" : ""} enregistré${history.length > 1 ? "s" : ""}`} color="#64748b" onClick={() => setScreen("history")} />
@@ -1281,10 +1283,11 @@ export default function Page() {
           <InventoryScreen session={session} onBack={goHome} onToast={showToast} />
         )}
 
-        {/* ===== E-SHOP ===== */}
+        {/* HIDDEN: E-shop screen — pas au point
         {screen === "eshop" && session && (
           <EshopScreen session={session} onBack={goHome} onToast={showToast} />
         )}
+        */}
       </main>
 
       {/* Print Modal — rendered at root level for z-index */}
@@ -4071,8 +4074,9 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
     { key: "palette", label: "Étiquette palette", icon: "🏭", hasSize: true },
     { key: "blank", label: "Étiquette vierge", icon: "✏️", hasSize: true },
     { key: "picking", label: "Étiquette colis (picking)", icon: "📦", hasSize: true },
-    { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
-    { key: "packingslip", label: "Bon de livraison (BL)", icon: "📄", hasSize: false },
+    // HIDDEN: E-shop — pas au point
+    // { key: "sendcloud", label: "Étiquette SendCloud", icon: "🚚", hasSize: false },
+    // { key: "packingslip", label: "Bon de livraison (BL)", icon: "📄", hasSize: false },
   ];
 
   const [configs, setConfigs] = useState<Record<LabelType, pn.LabelTypeConfig>>(() => pn.getAllLabelTypeConfigs());
@@ -4255,8 +4259,9 @@ function SettingsScreen({ onBack, session }: { onBack: () => void; session: any 
         }}>{msg}</div>
       )}
 
-      {/* E-shop excluded SKUs */}
+      {/* HIDDEN: E-shop chariot — pas au point
       <EshopChariotSkus session={session} />
+      */}
     </>
   );
 }
