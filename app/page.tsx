@@ -2623,7 +2623,7 @@ function EshopScreen({ session, onBack, onToast }: { session: any; onBack: () =>
   // Detail view
   if (selectedParcel) {
     const p = selectedParcel;
-    console.log("[eshop] parcel_items:", p.parcel_items);
+    console.log("[eshop] parcel_items:", p.parcel_items, "order_items:", p._raw?.order_items, "full:", JSON.stringify(p).substring(0, 300));
     const chariotSkus = getChariotSkusLocal();
     const items = (p.parcel_items || p.lines || []).filter((item: any) => {
       const val = parseFloat(item.value || "0");
