@@ -168,6 +168,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ debug: psJson, parcelId: parcel.id });
     }
 
+    // Debug parcel structure
+    if (action === "parcel_debug") {
+      const orderNumber = searchParams.get("order_number");
+      if (!orderNumber) return NextResponse.json({ error: "order_number requis" }, { status: 400 });
+      const parcelsData = await scJson(`${V2}/parcels?order_number=${orderNumber}`, auth);
+      const parcel = (parcelsData.parcels || [])[0];
+      if (!parcel) return NextResponse.json({ error: "Pas de colis" }, { status: 404 });
+      // Return full parcel to see all fields including label URLs
+      return NextResponse.json({ parcel });
+    }
+
     // Debug — show all distinct statuses and try multiple endpoints
     if (action === "debug") {
       const results: any = {};
