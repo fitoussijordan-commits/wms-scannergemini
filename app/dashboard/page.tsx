@@ -7,7 +7,7 @@ import * as odoo from "@/lib/odoo";
 interface StockAlert { productId: number; ref: string; name: string; qty: number; threshold: number; }
 interface ConsoRow { ref: string; name: string; months: Record<string, number>; total: number; avg: number; }
 interface DeliveryRow { date: string; count: number; lines: number; }
-interface MoveRow { date: string; type: string; ref: string; qty: number; lot: string; from: string; to: string; picking: string; }
+interface MoveRow { date: string; type: string; ref: string; qty: number; lot: string; from: string; to: string; picking: string; moveName: string; }
 
 // ── Config helpers (shared with scanner) ──────────────────────────────────────
 function loadCfg(): { u: string; d: string } | null {
@@ -87,6 +87,9 @@ export default function Dashboard() {
   const [delEnd, setDelEnd] = useState(() => new Date().toISOString().split("T")[0]);
   const [consoSearch, setConsoSearch] = useState("");
   const [moveRef, setMoveRef] = useState("");
+  const [moveSort, setMoveSort] = useState<"date"|"type"|"picking">("date");
+  const [moveSortDir, setMoveSortDir] = useState<"asc"|"desc">("desc");
+  const [moveTypeFilter, setMoveTypeFilter] = useState<string>("all");
   const [moveSearched, setMoveSearched] = useState(false);
   const [editThresh, setEditThresh] = useState<number | null>(null);
   const [stockSearch, setStockSearch] = useState("");
@@ -181,42 +184,33 @@ export default function Dashboard() {
       const startDate = months[0] + "-01";
       const endDate = new Date().toISOString().split("T")[0];
 
-      // Get outgoing picking type IDs (reliable vs dotted domain)
-      const outTypes = await odoo.searchRead(session, "stock.picking.type", [["code", "=", "outgoing"]], ["id"], 50);
-      const outTypeIds = outTypes.map((t: any) => t.id);
+      // Get customer location IDs (most reliable approach — no dotted domain)
+      const custLocs = await odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100);
+      const custLocIds = custLocs.map((l: any) => l.id);
 
-      // Get validated outgoing pickings in date range
-      const pickings = await odoo.searchRead(session, "stock.picking", [
-        ["state", "=", "done"],
-        ["picking_type_id", "in", outTypeIds],
-        ["date_done", ">=", startDate + " 00:00:00"],
-        ["date_done", "<=", endDate + " 23:59:59"],
-      ], ["id", "date_done"], 2000);
-
-      const pickingIds = pickings.map((p: any) => p.id);
-      const pickingDateMap: Record<number, string> = Object.fromEntries(pickings.map((p: any) => [p.id, p.date_done]));
-
-      if (!pickingIds.length) { setConso([]); setLoading(false); return; }
-
-      // Get all moves for these pickings in batches of 500 ids
-      const batchSize = 500;
+      // Get all done moves going TO customer locations in date range — covers PICK→OUT chains
+      const batchDateSize = 3; // months per batch to avoid timeout
       let allMoves: any[] = [];
-      for (let i = 0; i < pickingIds.length; i += batchSize) {
-        const batch = pickingIds.slice(i, i + batchSize);
+      for (let i = 0; i < months.length; i += batchDateSize) {
+        const batchStart = months[i] + "-01";
+        const batchEnd = i + batchDateSize >= months.length
+          ? endDate
+          : (() => { const d = new Date(months[i + batchDateSize] + "-01"); d.setDate(0); return d.toISOString().split("T")[0]; })();
         const batchMoves = await odoo.searchRead(session, "stock.move", [
-          ["picking_id", "in", batch],
           ["state", "=", "done"],
-        ], ["product_id", "product_qty", "picking_id"], 10000);
+          ["location_dest_id", "in", custLocIds],
+          ["date", ">=", batchStart + " 00:00:00"],
+          ["date", "<=", batchEnd + " 23:59:59"],
+        ], ["product_id", "product_qty", "date"], 10000);
         allMoves = allMoves.concat(batchMoves);
       }
       const moves = allMoves;
 
-      // Aggregate by product + month (using picking date for accuracy)
+      // Aggregate by product + month
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
       for (const m of moves) {
         const pid = m.product_id[0];
-        const pickingDate = pickingDateMap[m.picking_id?.[0]] || "";
-        const month = pickingDate.substring(0, 7);
+        const month = (m.date || "").substring(0, 7);
         if (!month) continue;
         if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
         byProd[pid].months[month] = (byProd[pid].months[month] || 0) + m.product_qty;
@@ -287,7 +281,7 @@ export default function Dashboard() {
       const rawMoves = await odoo.searchRead(session, "stock.move", [
         ["product_id", "=", productId],
         ["state", "=", "done"],
-      ], ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids"], 200, "date desc");
+      ], ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name"], 500, "date desc");
 
       // Determine type from location usage
       const locIds = Array.from(new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))) as number[];
@@ -308,6 +302,7 @@ export default function Dashboard() {
           from: m.location_id?.[1] || "—",
           to: m.location_dest_id?.[1] || "—",
           picking: m.picking_id?.[1] || "—",
+          moveName: m.name || "—",
         };
       });
       setMoves(rows);
@@ -470,8 +465,37 @@ export default function Dashboard() {
 
             {/* ── Gérer les seuils ── */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, padding: 20 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>Gérer les seuils</div>
-              <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 14 }}>Cliquez sur "+ Seuil" pour surveiller un article.</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Gérer les seuils</div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", background: C.purpleSoft, color: C.purple, border: `1px solid ${C.purpleBorder}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  📥 Importer Excel
+                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async e => {
+                    const file = e.target.files?.[0]; if (!file) return;
+                    try {
+                      const XLSX = await import("xlsx");
+                      const data = await file.arrayBuffer();
+                      const wb = XLSX.read(data, { type: "array" });
+                      const ws = wb.Sheets[wb.SheetNames[0]];
+                      const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+                      // Expected format: col A = ref, col B = seuil (or header row skipped)
+                      const newThresh = { ...thresholds };
+                      let imported = 0;
+                      for (const row of rows) {
+                        const ref = String(row[0] || "").trim();
+                        const val = Number(row[1]);
+                        if (!ref || isNaN(val) || val < 0) continue;
+                        // Find product by ref
+                        const match = Object.entries(stockMap).find(([, d]) => d.ref === ref);
+                        if (match) { newThresh[Number(match[0])] = val; imported++; }
+                      }
+                      saveThresholds(newThresh);
+                      alert(\`✓ \${imported} seuil(s) importé(s)\`);
+                    } catch (err) { alert("Erreur lecture Excel — vérifiez le format (colonne A: référence, colonne B: seuil)"); }
+                    e.target.value = "";
+                  }} />
+                </label>
+              </div>
+              <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 14 }}>Format Excel attendu : colonne A = référence, colonne B = seuil minimum.</div>
               <input value={stockSearch} onChange={e => setStockSearch(e.target.value)}
                 placeholder="Filtrer par référence ou nom..."
                 style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 13, fontFamily: "inherit", background: C.bg, marginBottom: 12, boxSizing: "border-box" }} />
@@ -681,43 +705,75 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {moves.length > 0 && (
-              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, overflow: "hidden" }}>
-                <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{moves.length} mouvement(s)</span>
+            {moves.length > 0 && (() => {
+              const typeOptions = ["all", ...Array.from(new Set(moves.map(m => m.type)))];
+              const filtered = moves
+                .filter(m => moveTypeFilter === "all" || m.type === moveTypeFilter)
+                .sort((a, b) => {
+                  const dir = moveSortDir === "asc" ? 1 : -1;
+                  if (moveSort === "date") return dir * a.date.localeCompare(b.date);
+                  if (moveSort === "type") return dir * a.type.localeCompare(b.type);
+                  if (moveSort === "picking") return dir * a.picking.localeCompare(b.picking);
+                  return 0;
+                });
+              const SortTh = ({ col, label }: { col: string; label: string }) => (
+                <th onClick={() => { if (moveSort === col) setMoveSortDir(d => d === "asc" ? "desc" : "asc"); else { setMoveSort(col as any); setMoveSortDir("desc"); } }}
+                  style={{ padding: "11px 16px", fontWeight: 700, color: moveSort === col ? C.blue : C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }}>
+                  {label} {moveSort === col ? (moveSortDir === "asc" ? "↑" : "↓") : ""}
+                </th>
+              );
+              return (
+                <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 16, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{filtered.length} / {moves.length} mouvement(s)</span>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {typeOptions.map(t => (
+                        <button key={t} onClick={() => setMoveTypeFilter(t)} style={{
+                          padding: "5px 12px", borderRadius: 8, border: `1px solid ${moveTypeFilter === t ? C.blue : C.border}`,
+                          background: moveTypeFilter === t ? C.blueSoft : C.bg,
+                          color: moveTypeFilter === t ? C.blue : C.textSec,
+                          fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+                        }}>{t === "all" ? "Tous" : t}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: C.bg }}>
+                          <SortTh col="date" label="Date" />
+                          <SortTh col="type" label="Type" />
+                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}` }}>Qté</th>
+                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}` }}>Lot</th>
+                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>De</th>
+                          <th style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>Vers</th>
+                          <SortTh col="picking" label="BL/Transfert" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map((m, i) => {
+                          const typeColor = m.type === "Sortie" ? C.red : m.type === "Entrée" ? C.green : C.blue;
+                          const typeBg = m.type === "Sortie" ? C.redSoft : m.type === "Entrée" ? C.greenSoft : C.blueSoft;
+                          return (
+                            <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.card : C.bg }}>
+                              <td style={{ padding: "11px 16px", color: C.textSec, whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
+                              <td style={{ padding: "11px 16px" }}>
+                                <span style={{ background: typeBg, color: typeColor, borderRadius: 6, padding: "3px 8px", fontSize: 12, fontWeight: 700 }}>{m.type}</span>
+                              </td>
+                              <td style={{ padding: "11px 16px", fontWeight: 800, color: C.text }}>{m.qty}</td>
+                              <td style={{ padding: "11px 16px", color: C.textSec, fontFamily: "monospace", fontSize: 12 }}>{m.lot}</td>
+                              <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.from}</td>
+                              <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.to}</td>
+                              <td style={{ padding: "11px 16px", color: C.blue, fontSize: 12, fontWeight: 600 }}>{m.picking}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ background: C.bg }}>
-                        {["Date", "Type", "Qté", "Lot", "De", "Vers", "BL/Transfert"].map(h => (
-                          <th key={h} style={{ padding: "11px 16px", fontWeight: 700, color: C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {moves.map((m, i) => {
-                        const typeColor = m.type === "Sortie" ? C.red : m.type === "Entrée" ? C.green : C.blue;
-                        const typeBg = m.type === "Sortie" ? C.redSoft : m.type === "Entrée" ? C.greenSoft : C.blueSoft;
-                        return (
-                          <tr key={i} style={{ borderBottom: `1px solid ${C.border}`, background: i % 2 === 0 ? C.card : C.bg }}>
-                            <td style={{ padding: "11px 16px", color: C.textSec, whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
-                            <td style={{ padding: "11px 16px" }}>
-                              <span style={{ background: typeBg, color: typeColor, borderRadius: 6, padding: "3px 8px", fontSize: 12, fontWeight: 700 }}>{m.type}</span>
-                            </td>
-                            <td style={{ padding: "11px 16px", fontWeight: 800, color: C.text }}>{m.qty}</td>
-                            <td style={{ padding: "11px 16px", color: C.textSec, fontFamily: "monospace", fontSize: 12 }}>{m.lot}</td>
-                            <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.from}</td>
-                            <td style={{ padding: "11px 16px", color: C.textMuted, fontSize: 12, whiteSpace: "nowrap" }}>{m.to}</td>
-                            <td style={{ padding: "11px 16px", color: C.blue, fontSize: 12, fontWeight: 600 }}>{m.picking}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+              );
+            })()}
             {moves.length === 0 && moveSearched && !loading && (
               <div style={{ textAlign: "center", padding: 60, color: C.textMuted, fontSize: 15 }}>Aucun mouvement trouvé pour "{moveRef}"</div>
             )}
