@@ -323,7 +323,22 @@ export default function Dashboard() {
     if (tab === "deliveries") loadDeliveries();
   }, [tab, session]);
 
-  const months = monthsBack(consoMonths);
+  const moveTypeOptions = ["all", ...Array.from(new Set(moves.map(m => m.type)))];
+  const filteredMoves = moves
+    .filter(m => moveTypeFilter === "all" || m.type === moveTypeFilter)
+    .sort((a, b) => {
+      const dir = moveSortDir === "asc" ? 1 : -1;
+      if (moveSort === "date") return dir * a.date.localeCompare(b.date);
+      if (moveSort === "type") return dir * a.type.localeCompare(b.type);
+      if (moveSort === "picking") return dir * a.picking.localeCompare(b.picking);
+      return 0;
+    });
+  const sortHeader = (col: string, label: string) => (
+    <th key={col} onClick={() => { if (moveSort === col) setMoveSortDir(d => d === "asc" ? "desc" : "asc"); else { setMoveSort(col as any); setMoveSortDir("desc"); } }}
+      style={{ padding: "11px 16px", fontWeight: 700, color: moveSort === col ? C.blue : C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }}>
+      {label}{moveSort === col ? (moveSortDir === "asc" ? " ↑" : " ↓") : ""}
+    </th>
+  );
 
   // ── Login screen ──
   if (!session) return (
@@ -353,23 +368,6 @@ export default function Dashboard() {
         </div>
       </div>
     </div>
-  );
-
-  const moveTypeOptions = ["all", ...Array.from(new Set(moves.map(m => m.type)))];
-  const filteredMoves = moves
-    .filter(m => moveTypeFilter === "all" || m.type === moveTypeFilter)
-    .sort((a, b) => {
-      const dir = moveSortDir === "asc" ? 1 : -1;
-      if (moveSort === "date") return dir * a.date.localeCompare(b.date);
-      if (moveSort === "type") return dir * a.type.localeCompare(b.type);
-      if (moveSort === "picking") return dir * a.picking.localeCompare(b.picking);
-      return 0;
-    });
-  const sortHeader = (col: string, label: string) => (
-    <th key={col} onClick={() => { if (moveSort === col) setMoveSortDir(d => d === "asc" ? "desc" : "asc"); else { setMoveSort(col as any); setMoveSortDir("desc"); } }}
-      style={{ padding: "11px 16px", fontWeight: 700, color: moveSort === col ? C.blue : C.textSec, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" }}>
-      {label}{moveSort === col ? (moveSortDir === "asc" ? " ↑" : " ↓") : ""}
-    </th>
   );
 
   return (
