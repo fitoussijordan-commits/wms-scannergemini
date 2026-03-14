@@ -979,6 +979,8 @@ export default function Page() {
     } catch (e: any) { setError(e.message); }
     setLoading(false);
   };
+
+  const validatePrepPicking = async () => {
     if (!session || !selectedPicking) return;
     setLoading(true); setError("");
     try {
