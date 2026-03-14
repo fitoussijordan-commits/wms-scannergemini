@@ -323,6 +323,8 @@ export default function Dashboard() {
     if (tab === "deliveries") loadDeliveries();
   }, [tab, session]);
 
+  const months = monthsBack(consoMonths);
+
   // ── Login screen ──
   if (!session) return (
     <div style={{ minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', system-ui, sans-serif" }}>
@@ -352,8 +354,6 @@ export default function Dashboard() {
       </div>
     </div>
   );
-
-  const months = monthsBack(consoMonths);
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans', system-ui, sans-serif" }}>
