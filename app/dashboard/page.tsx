@@ -184,12 +184,16 @@ export default function Dashboard() {
       const startDate = months[0] + "-01";
       const endDate = new Date().toISOString().split("T")[0];
 
-      // Get customer location IDs (most reliable approach — no dotted domain)
-      const custLocs = await odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100);
+      // Get location IDs by usage to avoid double-counting PICK→OUT chains
+      const [custLocs, intLocs] = await Promise.all([
+        odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100),
+        odoo.searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id"], 500),
+      ]);
       const custLocIds = custLocs.map((l: any) => l.id);
+      const intLocIds = intLocs.map((l: any) => l.id);
 
-      // Get all done moves going TO customer locations in date range — covers PICK→OUT chains
-      const batchDateSize = 3; // months per batch to avoid timeout
+      // Only moves: internal → customer (excludes PICK internal→internal, counts OUT internal→customer once)
+      const batchDateSize = 3;
       let allMoves: any[] = [];
       for (let i = 0; i < months.length; i += batchDateSize) {
         const batchStart = months[i] + "-01";
@@ -198,6 +202,7 @@ export default function Dashboard() {
           : (() => { const d = new Date(months[i + batchDateSize] + "-01"); d.setDate(0); return d.toISOString().split("T")[0]; })();
         const batchMoves = await odoo.searchRead(session, "stock.move", [
           ["state", "=", "done"],
+          ["location_id", "in", intLocIds],
           ["location_dest_id", "in", custLocIds],
           ["date", ">=", batchStart + " 00:00:00"],
           ["date", "<=", batchEnd + " 23:59:59"],
