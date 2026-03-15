@@ -802,22 +802,56 @@ export default function Dashboard() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
                 <div><div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div><div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Seuil = X mois de conso. Import Excel : col A = ref, col B = seuil.</div></div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {/* Auto-threshold: set all products that have conso data */}
-                  <button className="wms-btn" onClick={() => {
-                    if (!conso.length) { alert("Chargez d'abord la consommation (onglet Conso)"); return; }
+                  {/* Auto-threshold: fetches ALL conso independently, then sets thresholds */}
+                  <button className="wms-btn" onClick={async () => {
                     const mult = Number(prompt("Seuil = combien de mois de conso moyenne ?\n\nEx: 1 = 1 mois, 1.5 = 6 semaines, 2 = 2 mois", "1"));
                     if (!mult || isNaN(mult) || mult <= 0) return;
-                    const nt = { ...thresholds }; let count = 0;
-                    for (const row of conso) {
-                      if (!row.ref || row.avg <= 0) continue;
-                      const match = Object.entries(stockMap).find(([, d]) => d.ref === row.ref);
-                      if (match) { nt[Number(match[0])] = Math.round(row.avg * mult); count++; }
-                    }
-                    saveThresholdsLocal(nt);
-                    alert(`${count} seuil(s) auto-calculé(s) à ${mult} mois de conso`);
-                    loadAlerts();
-                  }} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 14px", fontSize: 13 }}>
-                    ⚡ Auto-seuils
+                    if (!session) return;
+                    setLoading(true); setError("");
+                    try {
+                      // Fetch full conso (all products, 6 months) independently
+                      const ms = monthsBack(6);
+                      const sd = ms[0] + "-01 00:00:00";
+                      const ed = new Date().toISOString().split("T")[0] + " 23:59:59";
+                      const allMoves = await odoo.searchRead(session, "stock.move", [
+                        ["state", "=", "done"], ["picking_type_id.code", "=", "outgoing"],
+                        ["date", ">=", sd], ["date", "<=", ed],
+                      ], ["product_id", "product_uom_qty", "date"], 20000);
+
+                      // Aggregate avg per product
+                      const byProd: Record<number, { ref: string; total: number; activeMonths: Set<string> }> = {};
+                      for (const m of allMoves) {
+                        const pid = m.product_id[0];
+                        const month = (m.date || "").substring(0, 7);
+                        if (!month) continue;
+                        if (!byProd[pid]) byProd[pid] = { ref: "", total: 0, activeMonths: new Set() };
+                        byProd[pid].total += m.product_uom_qty || 0;
+                        byProd[pid].activeMonths.add(month);
+                      }
+
+                      // Get refs
+                      const pids = Object.keys(byProd).map(Number);
+                      if (pids.length) {
+                        const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 2000);
+                        for (const p of prods) if (byProd[p.id]) byProd[p.id].ref = p.default_code || "";
+                      }
+
+                      // Match with stockMap and set thresholds
+                      const nt = { ...thresholds }; let count = 0;
+                      for (const [pidStr, data] of Object.entries(byProd)) {
+                        if (!data.ref || data.activeMonths.size === 0) continue;
+                        const avg = Math.round(data.total / data.activeMonths.size);
+                        if (avg <= 0) continue;
+                        const match = Object.entries(stockMap).find(([, d]) => d.ref === data.ref);
+                        if (match) { nt[Number(match[0])] = Math.round(avg * mult); count++; }
+                      }
+                      saveThresholdsLocal(nt);
+                      alert(`${count} seuil(s) auto-calculé(s) à ${mult}× la conso moyenne (6 mois)`);
+                      loadAlerts();
+                    } catch (e: any) { setError(e.message); }
+                    finally { setLoading(false); }
+                  }} disabled={loading} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 14px", fontSize: 13 }}>
+                    {loading ? <Spinner /> : "⚡"} Auto-seuils
                   </button>
                   <label className="wms-btn" style={{ background: "var(--purple-soft)", color: "var(--purple)", border: "1px solid var(--purple-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
                     {I.upload} Importer Excel
