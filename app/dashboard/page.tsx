@@ -34,6 +34,7 @@ interface MoveRow {
   to: string;
   picking: string;
   partner: string;
+  product: string;
 }
 interface StockProduct {
   qty: number;
@@ -245,6 +246,15 @@ th, td { text-align:left; }
 
 .theme-toggle { width:36px; height:36px; border-radius:8px; display:flex; align-items:center; justify-content:center; background:var(--bg-surface); border:1px solid var(--border); cursor:pointer; color:var(--text-secondary); transition:all .18s; }
 .theme-toggle:hover { background:var(--bg-hover); color:var(--text-primary); }
+
+/* Resizable columns */
+.wms-table th.resizable { position:relative; }
+.wms-table th.resizable .resize-handle {
+  position:absolute; right:0; top:0; bottom:0; width:5px;
+  cursor:col-resize; background:transparent; z-index:5;
+}
+.wms-table th.resizable .resize-handle:hover,
+.wms-table th.resizable .resize-handle:active { background:var(--accent); opacity:.4; }
 
 .stat-card { flex:1; min-width:140px; background:var(--bg-raised); border:1px solid var(--border); border-radius:12px; padding:18px 20px; animation:fadeIn .4s ease both; }
 `;
@@ -464,50 +474,43 @@ export default function Dashboard() {
 
   /*
    * loadConso — Consommation mensuelle
-   * Uses stock.move with quantity_done field (= "Fait" in Odoo 16 UI).
-   * stock.move.product_qty is the "demand" qty, quantity_done is what was actually done.
-   * stock.move.line location filters don't work the same (sub-locations vs usage-based).
-   * Filters: state=done, location_id usage=internal, location_dest_id usage=customer.
-   * avg = total / number of months with activity
+   * Uses stock.move.line with location_id.usage relational filter (dot notation).
+   * This matches Odoo's pivot view "Fait" column exactly.
+   * On move lines, location_id points to sub-locations (bins), but Odoo supports
+   * "location_id.usage" in search domains to filter by the location's usage field.
+   * Field: qty_done (Odoo 16) = actual quantity done.
    */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
       const months = monthsBack(consoMonths);
       const endDate = new Date().toISOString().split("T")[0];
-      const [custLocs, intLocs] = await Promise.all([
-        odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100),
-        odoo.searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id"], 500),
-      ]);
-      const custLocIds = custLocs.map((l: any) => l.id);
-      const intLocIds = intLocs.map((l: any) => l.id);
 
       const batchDateSize = 3;
-      let allMoves: any[] = [];
+      let allLines: any[] = [];
       for (let i = 0; i < months.length; i += batchDateSize) {
         const batchStart = months[i] + "-01";
         const batchEnd = i + batchDateSize >= months.length
           ? endDate
           : (() => { const d = new Date(months[i + batchDateSize] + "-01"); d.setDate(0); return d.toISOString().split("T")[0]; })();
 
-        const batchMoves = await odoo.searchRead(session, "stock.move", [
+        const batchLines = await odoo.searchRead(session, "stock.move.line", [
           ["state", "=", "done"],
-          ["location_id", "in", intLocIds],
-          ["location_dest_id", "in", custLocIds],
+          ["location_id.usage", "=", "internal"],
+          ["location_dest_id.usage", "=", "customer"],
           ["date", ">=", batchStart + " 00:00:00"],
           ["date", "<=", batchEnd + " 23:59:59"],
-        ], ["product_id", "quantity_done", "date"], 10000);
-        allMoves = allMoves.concat(batchMoves);
+        ], ["product_id", "qty_done", "date"], 10000);
+        allLines = allLines.concat(batchLines);
       }
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const m of allMoves) {
-        const pid = m.product_id[0];
-        const month = (m.date || "").substring(0, 7);
+      for (const ml of allLines) {
+        const pid = ml.product_id[0];
+        const month = (ml.date || "").substring(0, 7);
         if (!month) continue;
-        if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} };
-        // quantity_done = actual "Fait" qty on stock.move (Odoo 16)
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (m.quantity_done || 0);
+        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
       }
 
       const prodIds = Object.keys(byProd).map(Number);
@@ -541,19 +544,29 @@ export default function Dashboard() {
   }, [session, delStart, delEnd]);
 
   const loadMoves = useCallback(async () => {
-    if (!session || !moveRef.trim()) return; setLoading(true); setError(""); setMoveSearched(true);
-    try {
-      let prods = await odoo.searchRead(session, "product.product", [["default_code", "=ilike", moveRef.trim()]], ["id", "name", "default_code"], 5);
-      if (!prods.length) prods = await odoo.searchRead(session, "product.product", [["barcode", "=", moveRef.trim()]], ["id", "name", "default_code"], 5);
-      if (!prods.length) { setError(`Référence "${moveRef}" introuvable`); setMoves([]); setLoading(false); return; }
+    if (!session) return;
+    // Must have either a ref or a date range
+    const hasRef = moveRef.trim().length > 0;
+    const hasDate = moveStart || moveEnd;
+    if (!hasRef && !hasDate) return;
 
-      // Build domain with optional date range
-      const domain: any[] = [["product_id", "=", prods[0].id], ["state", "=", "done"]];
+    setLoading(true); setError(""); setMoveSearched(true);
+    try {
+      // Build domain
+      const domain: any[] = [["state", "=", "done"]];
+
+      // Optional: filter by product
+      if (hasRef) {
+        let prods = await odoo.searchRead(session, "product.product", [["default_code", "=ilike", moveRef.trim()]], ["id", "name", "default_code"], 5);
+        if (!prods.length) prods = await odoo.searchRead(session, "product.product", [["barcode", "=", moveRef.trim()]], ["id", "name", "default_code"], 5);
+        if (!prods.length) { setError(`Référence "${moveRef}" introuvable`); setMoves([]); setLoading(false); return; }
+        domain.push(["product_id", "=", prods[0].id]);
+      }
       if (moveStart) domain.push(["date", ">=", moveStart + " 00:00:00"]);
       if (moveEnd) domain.push(["date", "<=", moveEnd + " 23:59:59"]);
 
       const rawMoves = await odoo.searchRead(session, "stock.move", domain,
-        ["date", "picking_id", "location_id", "location_dest_id", "quantity_done", "product_qty", "lot_ids", "name"], 500, "date desc");
+        ["date", "picking_id", "location_id", "location_dest_id", "product_qty", "lot_ids", "name", "product_id"], 500, "date desc");
 
       // Get location usages
       const locIds = Array.from(new Set(rawMoves.flatMap((m: any) => [m.location_id?.[0], m.location_dest_id?.[0]]).filter(Boolean))) as number[];
@@ -566,18 +579,31 @@ export default function Dashboard() {
       const pickingPartner: Record<number, string> = {};
       for (const p of pickings) { pickingPartner[p.id] = p.partner_id ? p.partner_id[1] : "—"; }
 
+      // Get product refs if global search (no specific ref)
+      let prodRefs: Record<number, string> = {};
+      if (!hasRef) {
+        const prodIds = Array.from(new Set(rawMoves.map((m: any) => m.product_id?.[0]).filter(Boolean))) as number[];
+        if (prodIds.length) {
+          const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 500);
+          prodRefs = Object.fromEntries(prods.map((p: any) => [p.id, p.default_code || ""]));
+        }
+      }
+
       setMoves(rawMoves.map((m: any) => {
         const fromU = locUsage[m.location_id?.[0]] || ""; const toU = locUsage[m.location_dest_id?.[0]] || "";
         const type = fromU === "supplier" || (toU === "internal" && fromU !== "internal") ? "Entrée"
           : toU === "customer" || (fromU === "internal" && toU !== "internal") ? "Sortie" : "Interne";
-        const qty = m.quantity_done != null ? m.quantity_done : m.product_qty;
         const pickId = m.picking_id?.[0];
+        const prodName = m.product_id?.[1] || "—";
+        const prodRef = hasRef ? "" : (prodRefs[m.product_id?.[0]] || "");
+        const productLabel = prodRef ? `[${prodRef}] ${prodName}` : prodName;
         return {
-          date: m.date, type, qty,
+          date: m.date, type, qty: m.product_qty,
           lot: Array.isArray(m.lot_ids) ? m.lot_ids.join(", ") || "—" : "—",
           from: m.location_id?.[1] || "—", to: m.location_dest_id?.[1] || "—",
           picking: m.picking_id?.[1] || "—",
           partner: pickId ? (pickingPartner[pickId] || "—") : "—",
+          product: productLabel,
         };
       }));
       setMoveColFilters({}); setMoveColSort({ col: "date", dir: "desc" });
@@ -870,15 +896,14 @@ export default function Dashboard() {
           <div style={{ animation: "fadeIn .3s ease both" }}>
             <div style={{ marginBottom: 24 }}>
               <h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Historique des mouvements</h2>
-              <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Recherchez par référence article ou code-barres</p>
+              <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 16 }}>Recherchez par référence et/ou par période. Au moins un critère requis.</p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <input className="wms-input" value={moveRef} onChange={(e) => setMoveRef(e.target.value)} placeholder="Référence ou code-barres..." onKeyDown={(e) => e.key === "Enter" && loadMoves()} style={{ flex: 1, minWidth: 200 }} />
-                <input className="wms-input" type="date" value={moveStart} onChange={(e) => setMoveStart(e.target.value)} style={{ width: "auto" }} title="Date début (optionnel)" />
+                <input className="wms-input" value={moveRef} onChange={(e) => setMoveRef(e.target.value)} placeholder="Référence ou code-barres (optionnel)..." onKeyDown={(e) => e.key === "Enter" && loadMoves()} style={{ flex: 1, minWidth: 200 }} />
+                <input className="wms-input" type="date" value={moveStart} onChange={(e) => setMoveStart(e.target.value)} style={{ width: "auto" }} />
                 <span style={{ color: "var(--text-muted)" }}>→</span>
-                <input className="wms-input" type="date" value={moveEnd} onChange={(e) => setMoveEnd(e.target.value)} style={{ width: "auto" }} title="Date fin (optionnel)" />
-                <button className="wms-btn wms-btn-primary" onClick={loadMoves} disabled={loading || !moveRef.trim()} style={{ opacity: !moveRef.trim() ? .5 : 1 }}>{loading ? <Spinner /> : I.search} Rechercher</button>
+                <input className="wms-input" type="date" value={moveEnd} onChange={(e) => setMoveEnd(e.target.value)} style={{ width: "auto" }} />
+                <button className="wms-btn wms-btn-primary" onClick={loadMoves} disabled={loading || (!moveRef.trim() && !moveStart && !moveEnd)} style={{ opacity: (!moveRef.trim() && !moveStart && !moveEnd) ? .5 : 1 }}>{loading ? <Spinner /> : I.search} Rechercher</button>
               </div>
-              {(moveStart || moveEnd) && <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>Période : {moveStart || "…"} → {moveEnd || "…"}</div>}
             </div>
             {moves.length > 0 && (
               <div className="wms-card">
@@ -891,9 +916,10 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="wms-scrollbar" style={{ overflowX: "auto" }}>
-                  <table className="wms-table">
+                  <table className="wms-table" style={{ tableLayout: "fixed", minWidth: 1100 }}>
                     <thead><tr>
                       <FilterableHeader label="Date" colKey="date" values={moves.map((m) => fmtDate(m.date))} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
+                      {!moveRef.trim() && <FilterableHeader label="Produit" colKey="product" values={moves.map((m) => m.product)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />}
                       <FilterableHeader label="Type" colKey="type" values={moves.map((m) => m.type)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
                       <FilterableHeader label="Client" colKey="partner" values={moves.map((m) => m.partner)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
                       <FilterableHeader label="BL/Transfert" colKey="picking" values={moves.map((m) => m.picking)} filterState={moveColFilters} setFilterState={setMoveColFilters} sortState={moveColSort} setSortState={setMoveColSort} />
@@ -908,8 +934,9 @@ export default function Dashboard() {
                         return (
                           <tr key={i}>
                             <td style={{ fontFamily: MONO, fontSize: 12, whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
+                            {!moveRef.trim() && <td style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.product}>{m.product}</td>}
                             <td><span className="wms-badge" style={{ background: tc.bg, color: tc.c }}>{m.type}</span></td>
-                            <td style={{ fontSize: 12, whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }} title={m.partner}>{m.partner}</td>
+                            <td style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 180 }} title={m.partner}>{m.partner}</td>
                             <td style={{ color: "var(--accent)", fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{m.picking}</td>
                             <td style={{ fontWeight: 800, fontFamily: MONO }}>{m.qty}</td>
                             <td style={{ fontFamily: MONO, fontSize: 12 }}>{m.lot}</td>
@@ -923,8 +950,8 @@ export default function Dashboard() {
                 </div>
               </div>
             )}
-            {moves.length === 0 && moveSearched && !loading && <EmptyState icon={I.search} title={`Aucun mouvement pour "${moveRef}"`} sub="Vérifiez la référence et réessayez" />}
-            {!moveSearched && !loading && <EmptyState icon={I.history} title="Entrez une référence" sub="pour afficher l'historique des mouvements" />}
+            {moves.length === 0 && moveSearched && !loading && <EmptyState icon={I.search} title="Aucun mouvement trouvé" sub="Vérifiez vos critères et réessayez" />}
+            {!moveSearched && !loading && <EmptyState icon={I.history} title="Entrez une référence ou une période" sub="pour afficher l'historique des mouvements" />}
             {loading && <div style={{ textAlign: "center", padding: 40 }}><Spinner size={24} /></div>}
           </div>
         )}
