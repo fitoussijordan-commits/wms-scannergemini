@@ -448,7 +448,15 @@ export default function Dashboard() {
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, thresholds]);
 
-  // loadConso: internal→customer moves only (no PICK double-count), avg = total / active months
+  /*
+   * loadConso — Consommation mensuelle
+   * Uses stock.move.line (not stock.move) to match Odoo's pivot view "Fait" column.
+   * stock.move.product_qty can differ from the sum of move line quantities when
+   * moves are split across lots, partial transfers, or backorders.
+   * Filters: state=done, location_id=internal, location_dest_id=customer.
+   * Field: quantity (= qty_done in Odoo 17+, previously qty_done in older versions)
+   * avg = total / number of months with activity (not total selected months)
+   */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
@@ -460,24 +468,52 @@ export default function Dashboard() {
       ]);
       const custLocIds = custLocs.map((l: any) => l.id);
       const intLocIds = intLocs.map((l: any) => l.id);
+
+      // Batch by 3-month windows to stay within Odoo RPC result limits
       const batchDateSize = 3;
-      let allMoves: any[] = [];
+      let allLines: any[] = [];
       for (let i = 0; i < months.length; i += batchDateSize) {
         const batchStart = months[i] + "-01";
-        const batchEnd = i + batchDateSize >= months.length ? endDate : (() => { const d = new Date(months[i + batchDateSize] + "-01"); d.setDate(0); return d.toISOString().split("T")[0]; })();
-        const batchMoves = await odoo.searchRead(session, "stock.move", [
-          ["state", "=", "done"], ["location_id", "in", intLocIds], ["location_dest_id", "in", custLocIds],
-          ["date", ">=", batchStart + " 00:00:00"], ["date", "<=", batchEnd + " 23:59:59"],
-        ], ["product_id", "product_qty", "date"], 10000);
-        allMoves = allMoves.concat(batchMoves);
+        const batchEnd = i + batchDateSize >= months.length
+          ? endDate
+          : (() => { const d = new Date(months[i + batchDateSize] + "-01"); d.setDate(0); return d.toISOString().split("T")[0]; })();
+
+        const batchLines = await odoo.searchRead(session, "stock.move.line", [
+          ["state", "=", "done"],
+          ["location_id", "in", intLocIds],
+          ["location_dest_id", "in", custLocIds],
+          ["date", ">=", batchStart + " 00:00:00"],
+          ["date", "<=", batchEnd + " 23:59:59"],
+        ], ["product_id", "quantity", "date"], 10000);
+        allLines = allLines.concat(batchLines);
       }
+
+      // Aggregate by product + month
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
-      for (const m of allMoves) { const pid = m.product_id[0]; const month = (m.date || "").substring(0, 7); if (!month) continue; if (!byProd[pid]) byProd[pid] = { name: m.product_id[1], ref: "", months: {} }; byProd[pid].months[month] = (byProd[pid].months[month] || 0) + m.product_qty; }
+      for (const ml of allLines) {
+        const pid = ml.product_id[0];
+        const month = (ml.date || "").substring(0, 7);
+        if (!month) continue;
+        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
+        // "quantity" = qty_done on stock.move.line (matches Odoo "Fait" column)
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.quantity || ml.qty_done || 0);
+      }
+
       const prodIds = Object.keys(byProd).map(Number);
-      if (prodIds.length) { const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 2000); for (const p of prods) if (byProd[p.id]) byProd[p.id].ref = p.default_code || ""; }
-      const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => ({ ref: v.ref, name: v.name, months: v.months, total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0 }));
+      if (prodIds.length) {
+        const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 2000);
+        for (const p of prods) if (byProd[p.id]) byProd[p.id].ref = p.default_code || "";
+      }
+
+      const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => ({
+        ref: v.ref, name: v.name, months: v.months,
+        total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0,
+      }));
       rows.sort((a, b) => b.total - a.total);
-      rows.forEach(r => { const active = Object.values(r.months).filter(v => v > 0).length; r.avg = active > 0 ? Math.round(r.total / active) : 0; });
+      rows.forEach(r => {
+        const active = Object.values(r.months).filter(v => v > 0).length;
+        r.avg = active > 0 ? Math.round(r.total / active) : 0;
+      });
       setConso(rows);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [session, consoMonths]);
