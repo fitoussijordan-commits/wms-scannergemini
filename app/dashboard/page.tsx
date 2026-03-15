@@ -493,7 +493,7 @@ export default function Dashboard() {
       ];
 
       // If searching for a specific product, add product filter (= fast query)
-      let searchedProdIds: number[] | null = null;
+      let searchedProdIds: number[] = [];
       if (consoSearch.trim()) {
         const prods = await odoo.searchRead(session, "product.product", [
           "|",
@@ -799,40 +799,81 @@ export default function Dashboard() {
             {alerts.length === 0 && overstockItems.length === 0 && Object.keys(stockMap).length > 0 && <div style={{ background: "var(--success-soft)", border: "1px solid var(--success-border)", borderRadius: 12, padding: "22px 28px", marginBottom: 28, display: "flex", alignItems: "center", gap: 16, animation: "fadeIn .4s ease both" }}>{I.check}<div><div style={{ fontSize: 15, fontWeight: 700, color: "var(--success)" }}>Tous les stocks sont OK</div><div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>Aucun article en sous-stock ou surstock.</div></div></div>}
             {/* Threshold manager */}
             <div className="wms-card" style={{ padding: 24 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
-                <div><div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div><div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Import Excel : col A = référence, col B = seuil</div></div>
-                <label className="wms-btn" style={{ background: "var(--purple-soft)", color: "var(--purple)", border: "1px solid var(--purple-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
-                  {I.upload} Importer Excel
-                  <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async (e) => {
-                    const file = e.target.files?.[0]; if (!file) return;
-                    try { const XLSX = await import("xlsx"); const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type: "array" }); const ws = wb.Sheets[wb.SheetNames[0]]; const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1 }); const nt = { ...thresholds }; let imp = 0; for (const row of rows) { const ref = String(row[0] || "").trim(); const val = Number(row[1]); if (!ref || isNaN(val) || val < 0) continue; const match = Object.entries(stockMap).find(([, d]) => d.ref === ref); if (match) { nt[Number(match[0])] = val; imp++; } } saveThresholdsLocal(nt); alert(`${imp} seuil(s) importé(s)`); } catch { alert("Erreur lecture Excel"); } e.target.value = "";
-                  }} />
-                </label>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                <div><div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div><div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Seuil = X mois de conso. Import Excel : col A = ref, col B = seuil.</div></div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {/* Auto-threshold: set all products that have conso data */}
+                  <button className="wms-btn" onClick={() => {
+                    if (!conso.length) { alert("Chargez d'abord la consommation (onglet Conso)"); return; }
+                    const mult = Number(prompt("Seuil = combien de mois de conso moyenne ?\n\nEx: 1 = 1 mois, 1.5 = 6 semaines, 2 = 2 mois", "1"));
+                    if (!mult || isNaN(mult) || mult <= 0) return;
+                    const nt = { ...thresholds }; let count = 0;
+                    for (const row of conso) {
+                      if (!row.ref || row.avg <= 0) continue;
+                      const match = Object.entries(stockMap).find(([, d]) => d.ref === row.ref);
+                      if (match) { nt[Number(match[0])] = Math.round(row.avg * mult); count++; }
+                    }
+                    saveThresholdsLocal(nt);
+                    alert(`${count} seuil(s) auto-calculé(s) à ${mult} mois de conso`);
+                    loadAlerts();
+                  }} style={{ background: "var(--success-soft)", color: "var(--success)", border: "1px solid var(--success-border)", padding: "8px 14px", fontSize: 13 }}>
+                    ⚡ Auto-seuils
+                  </button>
+                  <label className="wms-btn" style={{ background: "var(--purple-soft)", color: "var(--purple)", border: "1px solid var(--purple-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
+                    {I.upload} Importer Excel
+                    <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async (e) => {
+                      const file = e.target.files?.[0]; if (!file) return;
+                      try { const XLSX = await import("xlsx"); const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type: "array" }); const ws = wb.Sheets[wb.SheetNames[0]]; const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1 }); const nt = { ...thresholds }; let imp = 0; for (const row of rows) { const ref = String(row[0] || "").trim(); const val = Number(row[1]); if (!ref || isNaN(val) || val < 0) continue; const match = Object.entries(stockMap).find(([, d]) => d.ref === ref); if (match) { nt[Number(match[0])] = val; imp++; } } saveThresholdsLocal(nt); alert(`${imp} seuil(s) importé(s)`); } catch { alert("Erreur lecture Excel"); } e.target.value = "";
+                    }} />
+                  </label>
+                  {/* Export thresholds */}
+                  <button className="wms-btn wms-btn-ghost" onClick={() => {
+                    const lines = Object.entries(thresholds).map(([pid, thresh]) => {
+                      const p = stockMap[Number(pid)];
+                      return p ? `${p.ref}\t${thresh}\t${p.name}` : null;
+                    }).filter(Boolean);
+                    if (!lines.length) { alert("Aucun seuil défini"); return; }
+                    const text = "Référence\tSeuil\tNom\n" + lines.join("\n");
+                    navigator.clipboard.writeText(text).then(() => alert(`${lines.length} seuil(s) copiés dans le presse-papier`));
+                  }} style={{ padding: "8px 14px", fontSize: 13 }}>
+                    📋 Copier
+                  </button>
+                </div>
               </div>
               <input className="wms-input" value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} placeholder="Filtrer par référence ou nom..." style={{ marginBottom: 16 }} />
               <div className="wms-scrollbar" style={{ maxHeight: 420, overflowY: "auto" }}>
                 {Object.keys(stockMap).length === 0 && !loading && <EmptyState icon={I.refresh} title='Cliquez sur "Actualiser"' sub="pour charger les produits" />}
                 {Object.entries(stockMap).filter(([, d]) => !stockSearch || d.ref.toLowerCase().includes(stockSearch.toLowerCase()) || d.name.toLowerCase().includes(stockSearch.toLowerCase())).map(([pidStr, data]) => {
                   const pid = Number(pidStr); const { qty, name, ref } = data; const thresh = thresholds[pid]; const isAlert = thresh !== undefined && qty <= thresh;
+                  const consoRow = conso.find((c) => c.ref === ref);
+                  const suggestedThresh = consoRow && consoRow.avg > 0 ? consoRow.avg : null;
                   return (
                     <div key={pid} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderBottom: "1px solid var(--border)" }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: thresh !== undefined ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                           {ref && <span style={{ fontFamily: MONO, color: "var(--accent)", fontWeight: 700, marginRight: 8, fontSize: 12 }}>[{ref}]</span>}{name}
                         </div>
-                        <div style={{ fontSize: 12, color: isAlert ? "var(--danger)" : "var(--text-muted)", marginTop: 2 }}>Stock : <strong>{qty}</strong>{thresh !== undefined && ` · Seuil : ${thresh}`}{isAlert && <span style={{ marginLeft: 8, color: "var(--danger)", fontWeight: 700 }}>● Alerte</span>}</div>
-                      </div>
-                      {editThresh === pid ? (
-                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                          <input className="wms-input" value={editVal} onChange={(e) => setEditVal(e.target.value)} type="number" min="0" style={{ width: 80, padding: "6px 10px" }} autoFocus onKeyDown={(e) => { if (e.key === "Enter") { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); } if (e.key === "Escape") setEditThresh(null); }} />
-                          <button className="wms-btn" onClick={() => { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); }} style={{ background: "var(--success)", color: "#fff", padding: "6px 10px", fontSize: 13 }}>✓</button>
-                          <button className="wms-btn wms-btn-danger" onClick={() => { const t = { ...thresholds }; delete t[pid]; saveThresholdsLocal(t); setEditThresh(null); }} style={{ padding: "6px 10px", fontSize: 12 }}>✕</button>
+                        <div style={{ fontSize: 12, color: isAlert ? "var(--danger)" : "var(--text-muted)", marginTop: 2 }}>
+                          Stock : <strong>{qty}</strong>
+                          {thresh !== undefined && ` · Seuil : ${thresh}`}
+                          {suggestedThresh && thresh === undefined && <span style={{ marginLeft: 8, color: "var(--text-muted)" }}>conso moy: {suggestedThresh}/mois</span>}
+                          {isAlert && <span style={{ marginLeft: 8, color: "var(--danger)", fontWeight: 700 }}>● Alerte</span>}
                         </div>
-                      ) : (
-                        <button className="wms-btn" onClick={() => { setEditThresh(pid); setEditVal(thresh !== undefined ? String(thresh) : ""); }} style={{ flexShrink: 0, padding: "6px 14px", fontSize: 12, fontWeight: thresh !== undefined ? 700 : 400, fontFamily: thresh !== undefined ? MONO : "inherit", background: thresh !== undefined ? (isAlert ? "var(--danger-soft)" : "var(--warning-soft)") : "var(--bg-surface)", color: thresh !== undefined ? (isAlert ? "var(--danger)" : "var(--warning)") : "var(--text-muted)", border: `1px solid ${thresh !== undefined ? (isAlert ? "var(--danger-border)" : "var(--warning-border)") : "var(--border)"}` }}>
-                          {thresh !== undefined ? `Seuil: ${thresh}` : "+ Seuil"}
-                        </button>
-                      )}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                        {editThresh === pid ? (
+                          <>
+                            <input className="wms-input" value={editVal} onChange={(e) => setEditVal(e.target.value)} type="number" min="0" style={{ width: 80, padding: "6px 10px" }} autoFocus onKeyDown={(e) => { if (e.key === "Enter") { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); } if (e.key === "Escape") setEditThresh(null); }} />
+                            {suggestedThresh && <button className="wms-btn" onClick={() => setEditVal(String(suggestedThresh))} title={`= 1 mois conso (${suggestedThresh})`} style={{ padding: "6px 8px", fontSize: 11, background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-border)" }}>⚡</button>}
+                            <button className="wms-btn" onClick={() => { const v = Number(editVal); if (!isNaN(v) && v >= 0) saveThresholdsLocal({ ...thresholds, [pid]: v }); setEditThresh(null); }} style={{ background: "var(--success)", color: "#fff", padding: "6px 10px", fontSize: 13 }}>✓</button>
+                            <button className="wms-btn wms-btn-danger" onClick={() => { const t = { ...thresholds }; delete t[pid]; saveThresholdsLocal(t); setEditThresh(null); }} style={{ padding: "6px 10px", fontSize: 12 }}>✕</button>
+                          </>
+                        ) : (
+                          <button className="wms-btn" onClick={() => { setEditThresh(pid); setEditVal(thresh !== undefined ? String(thresh) : suggestedThresh ? String(suggestedThresh) : ""); }} style={{ flexShrink: 0, padding: "6px 14px", fontSize: 12, fontWeight: thresh !== undefined ? 700 : 400, fontFamily: thresh !== undefined ? MONO : "inherit", background: thresh !== undefined ? (isAlert ? "var(--danger-soft)" : "var(--warning-soft)") : "var(--bg-surface)", color: thresh !== undefined ? (isAlert ? "var(--danger)" : "var(--warning)") : "var(--text-muted)", border: `1px solid ${thresh !== undefined ? (isAlert ? "var(--danger-border)" : "var(--warning-border)") : "var(--border)"}` }}>
+                            {thresh !== undefined ? `Seuil: ${thresh}` : suggestedThresh ? `+ ${suggestedThresh}` : "+ Seuil"}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
