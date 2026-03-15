@@ -474,8 +474,9 @@ export default function Dashboard() {
 
   /*
    * loadConso — Consommation mensuelle
-   * Single RPC call on stock.move using picking_type_id.code dot-notation filter.
-   * product_uom_qty = qty from outgoing done moves, grouped by product + month.
+   * If consoSearch is set: find product first, then query only its moves (instant).
+   * If empty: load all outgoing moves (slower but full picture).
+   * Uses picking_type_id.code dot-notation for outgoing filter.
    */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -484,12 +485,28 @@ export default function Dashboard() {
       const startDate = months[0] + "-01 00:00:00";
       const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
 
-      const allMoves = await odoo.searchRead(session, "stock.move", [
+      const domain: any[] = [
         ["state", "=", "done"],
         ["picking_type_id.code", "=", "outgoing"],
         ["date", ">=", startDate],
         ["date", "<=", endDate],
-      ], ["product_id", "product_uom_qty", "date"], 10000);
+      ];
+
+      // If searching for a specific product, add product filter (= fast query)
+      let searchedProdIds: number[] | null = null;
+      if (consoSearch.trim()) {
+        const prods = await odoo.searchRead(session, "product.product", [
+          "|",
+          ["default_code", "=ilike", "%" + consoSearch.trim() + "%"],
+          ["name", "=ilike", "%" + consoSearch.trim() + "%"],
+        ], ["id"], 50);
+        searchedProdIds = prods.map((p: any) => p.id);
+        if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
+        domain.push(["product_id", "in", searchedProdIds]);
+      }
+
+      const allMoves = await odoo.searchRead(session, "stock.move", domain,
+        ["product_id", "product_uom_qty", "date"], 10000);
 
       const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
       for (const m of allMoves) {
@@ -517,7 +534,7 @@ export default function Dashboard() {
       });
       setConso(rows);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, consoMonths]);
+  }, [session, consoMonths, consoSearch]);
 
   const loadDeliveries = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -626,10 +643,10 @@ export default function Dashboard() {
   }, [deliveries, delColFilters, delColSort]);
 
   const sortedConso = useMemo(() => {
-    let r = conso.filter((row) => !consoSearch || row.ref.toLowerCase().includes(consoSearch.toLowerCase()) || row.name.toLowerCase().includes(consoSearch.toLowerCase()));
-    if (consoColSort.dir) { const d = consoColSort.dir === "asc" ? 1 : -1; const c = consoColSort.col; r = [...r].sort((a, b) => c === "ref" ? d * (a.ref || "").localeCompare(b.ref || "") : c === "name" ? d * a.name.localeCompare(b.name) : c === "avg" ? d * (a.avg - b.avg) : c === "total" ? d * (a.total - b.total) : d * ((a.months[c] || 0) - (b.months[c] || 0))); }
+    let r = [...conso];
+    if (consoColSort.dir) { const d = consoColSort.dir === "asc" ? 1 : -1; const c = consoColSort.col; r.sort((a, b) => c === "ref" ? d * (a.ref || "").localeCompare(b.ref || "") : c === "name" ? d * a.name.localeCompare(b.name) : c === "avg" ? d * (a.avg - b.avg) : c === "total" ? d * (a.total - b.total) : d * ((a.months[c] || 0) - (b.months[c] || 0))); }
     return r;
-  }, [conso, consoSearch, consoColSort]);
+  }, [conso, consoColSort]);
 
   const MONO = "'JetBrains Mono', monospace";
 
@@ -828,14 +845,14 @@ export default function Dashboard() {
         {/* ══════════ CONSO ══════════ */}
         {tab === "conso" && (
           <div style={{ animation: "fadeIn .3s ease both" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
               <div><h2 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-.3px", marginBottom: 4 }}>Consommation mensuelle</h2><p style={{ fontSize: 13, color: "var(--text-muted)" }}>Quantités sorties vers clients (hors transferts internes)</p></div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <select className="wms-select" value={consoMonths} onChange={(e) => setConsoMonths(Number(e.target.value))}>{[3, 6, 9, 12].map((n) => <option key={n} value={n}>{n} mois</option>)}</select>
                 <button className="wms-btn wms-btn-primary" onClick={loadConso} disabled={loading}>{loading ? <Spinner /> : I.refresh} Charger</button>
               </div>
             </div>
-            {conso.length > 0 && <input className="wms-input" value={consoSearch} onChange={(e) => setConsoSearch(e.target.value)} placeholder="Filtrer par référence ou désignation..." style={{ marginBottom: 16 }} />}
+            <input className="wms-input" value={consoSearch} onChange={(e) => setConsoSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && loadConso()} placeholder="Référence ou nom produit (Entrée pour chercher, vide = tout)..." style={{ marginBottom: 16 }} />
             {conso.length > 0 && (
               <div className="wms-card"><div className="wms-scrollbar" style={{ overflowX: "auto" }}>
                 <table className="wms-table">
