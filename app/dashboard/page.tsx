@@ -484,7 +484,7 @@ export default function Dashboard() {
           ["location_dest_id", "in", custLocIds],
           ["date", ">=", batchStart + " 00:00:00"],
           ["date", "<=", batchEnd + " 23:59:59"],
-        ], ["product_id", "quantity", "date"], 10000);
+        ], ["product_id", "qty_done", "date"], 10000);
         allLines = allLines.concat(batchLines);
       }
 
@@ -495,8 +495,8 @@ export default function Dashboard() {
         const month = (ml.date || "").substring(0, 7);
         if (!month) continue;
         if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
-        // "quantity" = qty_done on stock.move.line (matches Odoo "Fait" column)
-        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.quantity || ml.qty_done || 0);
+        // "qty_done" on stock.move.line = Odoo "Fait" column (Odoo 16 field name)
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || ml.quantity || 0);
       }
 
       const prodIds = Object.keys(byProd).map(Number);
