@@ -506,10 +506,18 @@ export default function Dashboard() {
       const startDate = months[0] + "-01 00:00:00";
       const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
 
+      // Get location IDs (fiable vs filtres dotted ignorés par Odoo XML-RPC)
+      const [custLocs, intLocs] = await Promise.all([
+        odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100),
+        odoo.searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id"], 500),
+      ]);
+      const custLocIds = custLocs.map((l: any) => l.id);
+      const intLocIds = intLocs.map((l: any) => l.id);
+
       const domain: any[] = [
         ["state", "=", "done"],
-        ["location_id.usage", "=", "internal"],
-        ["location_dest_id.usage", "=", "customer"],
+        ["location_id", "in", intLocIds],
+        ["location_dest_id", "in", custLocIds],
         ["date", ">=", startDate],
         ["date", "<=", endDate],
       ];
@@ -927,14 +935,22 @@ export default function Dashboard() {
                     if (!confirm("Calculer et figer les seuils pour TOUS les produits ?\n\nFormule : seuil = conso totale 12 mois ÷ 12 (= 1 mois de conso moyenne)\n\nCette action écrase les seuils existants dans Supabase.")) return;
                     setLoading(true); setError("");
                     try {
-                      // Fetch 12 months of conso from Odoo
+                      // Fetch 12 months of conso — même méthode que loadConso (fiable)
                       const ms = monthsBack(12);
                       const sd = ms[0] + "-01 00:00:00";
                       const ed = new Date().toISOString().split("T")[0] + " 23:59:59";
+
+                      // Get customer location IDs (évite les filtres dotted non fiables)
+                      const custLocs = await odoo.searchRead(session, "stock.location", [["usage", "=", "customer"]], ["id"], 100);
+                      const intLocs = await odoo.searchRead(session, "stock.location", [["usage", "=", "internal"]], ["id"], 500);
+                      const custLocIds = custLocs.map((l: any) => l.id);
+                      const intLocIds = intLocs.map((l: any) => l.id);
+
+                      // Mouvements internes → clients uniquement (pas de double comptage PICK→OUT)
                       const allMoves = await odoo.searchRead(session, "stock.move.line", [
                         ["state", "=", "done"],
-                        ["location_id.usage", "=", "internal"],
-                        ["location_dest_id.usage", "=", "customer"],
+                        ["location_id", "in", intLocIds],
+                        ["location_dest_id", "in", custLocIds],
                         ["date", ">=", sd], ["date", "<=", ed],
                       ], ["product_id", "qty_done"], 20000);
 
