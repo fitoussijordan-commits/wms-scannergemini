@@ -933,40 +933,32 @@ export default function Page() {
       const newQty = (ml.qty_done || 0) + 1;
       await odoo.setMoveLineQtyDone(session, ml.id, newQty, lotId || ml.lot_id?.[0] || null);
 
-        // Refresh
-        const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
-        setPickingMoveLines(updatedLines);
+      // Refresh
+      const updatedLines = await odoo.getPickingMoveLines(session, selectedPicking.id);
+      setPickingMoveLines(updatedLines);
 
-        // Mark as scanned if fully done
-        if (newQty >= (ml.reserved_uom_qty || 0)) {
-          setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
-        }
+      if (newQty >= (ml.reserved_uom_qty || 0)) {
+        setPrepScanned(prev => { const n = new Set(Array.from(prev)); n.add(ml.id); return n; });
+      }
 
-        const remaining = (ml.reserved_uom_qty || 0) - newQty;
-        vibrateSuccess();
-        showToast(`✓ ${lotName || r.data.name} · ${newQty}/${ml.reserved_uom_qty || 0}`);
+      const remaining = (ml.reserved_uom_qty || 0) - newQty;
+      vibrateSuccess();
+      showToast(`✓ ${lotName || ml.product_id[1]} · ${newQty}/${ml.reserved_uom_qty || 0}`);
 
-        // Check if more lines at this location
-        const morePending = updatedLines.filter((m: any) =>
-          m.location_id && m.location_id[0] === prepStep.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
-        );
-        if (morePending.length === 0) {
-          setPrepStep(null); // all done at this location
-          showToast(`✓ Emplacement ${prepStep.locName} terminé`);
-        } else if (remaining <= 0) {
-          // Current line done, move to next at same location
-          const next = morePending[0];
-          const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
-          setPrepStep({
-            locId: prepStep.locId, locName: prepStep.locName, lineId: next.id,
-            productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined,
-            remaining: nextRemaining,
-          });
-        } else {
-          setPrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
-        }
+      const morePending = updatedLines.filter((m: any) =>
+        m.location_id && m.location_id[0] === prepStep.locId && (m.qty_done || 0) < (m.reserved_uom_qty || 0)
+      );
+      if (morePending.length === 0) {
+        setPrepStep(null);
+        showToast(`✓ Emplacement ${prepStep.locName} terminé`);
+      } else if (remaining <= 0) {
+        const next = morePending[0];
+        const nextRemaining = (next.reserved_uom_qty || 0) - (next.qty_done || 0);
+        setPrepStep({ locId: prepStep.locId, locName: prepStep.locName, lineId: next.id, productName: next.product_id[1], lotName: next.lot_id?.[1] || undefined, remaining: nextRemaining });
+      } else {
+        setPrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
+      }
       } else if (r.type === "location") {
-        // Scanning a new location resets the step
         setPrepStep(null);
         doPrepScan(code); // re-enter as step 1
       } else {
