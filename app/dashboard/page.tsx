@@ -499,10 +499,10 @@ export default function Dashboard() {
       const pickTypeIds = pickingTypes.filter((t: any) => t.sequence_code?.toLowerCase().includes("pick") || t.name?.toLowerCase().includes("pick")).map((t: any) => t.id);
 
       // Load OUT pickings
-      const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "user_id"], 2000, "date_done desc") : [];
+      const outPickings = outTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", outTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "partner_id", "move_ids", "user_id", "write_uid"], 2000, "date_done desc") : [];
 
       // Load PICK pickings
-      const pickPickings = pickTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", pickTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "move_ids", "user_id"], 2000, "date_done desc") : [];
+      const pickPickings = pickTypeIds.length ? await odoo.searchRead(session, "stock.picking", [["state", "=", "done"], ["picking_type_id", "in", pickTypeIds], ["date_done", ">=", delStart + " 00:00:00"], ["date_done", "<=", delEnd + " 23:59:59"]], ["name", "date_done", "move_ids", "user_id", "write_uid"], 2000, "date_done desc") : [];
 
       const allPickings = [...outPickings.map((p: any) => ({ ...p, pickKind: "out" })), ...pickPickings.map((p: any) => ({ ...p, pickKind: "pick" }))];
 
@@ -518,7 +518,7 @@ export default function Dashboard() {
       // Stats préparateurs
       const prepByUser: Record<string, { picking: number; emballage: number }> = {};
       for (const p of allPickings) {
-        const name = p.user_id ? p.user_id[1] : "Inconnu";
+        const name = (p.user_id?.[1] || p.write_uid?.[1]) || "Inconnu";
         if (!prepByUser[name]) prepByUser[name] = { picking: 0, emballage: 0 };
         if (p.pickKind === "pick") prepByUser[name].picking++;
         else prepByUser[name].emballage++;
