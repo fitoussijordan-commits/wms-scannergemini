@@ -958,13 +958,6 @@ export default function Page() {
       } else {
         setPrepStep(prev => prev ? { ...prev, lineId: ml.id, remaining } : null);
       }
-      } else if (r.type === "location") {
-        setPrepStep(null);
-        doPrepScan(code); // re-enter as step 1
-      } else {
-        showToast(`"${code}" non trouvé`);
-        vibrateError();
-      }
     } catch (e: any) { setError(e.message); vibrateError(); }
   };
 
