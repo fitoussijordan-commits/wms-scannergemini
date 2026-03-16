@@ -135,3 +135,27 @@ export function isCacheStale(syncedAt: Date | null, maxAgeMinutes: number): bool
   if (!syncedAt) return true;
   return (Date.now() - syncedAt.getTime()) > maxAgeMinutes * 60 * 1000;
 }
+
+// ══════════════════════════════════════════
+// WATCHLIST
+// ══════════════════════════════════════════
+
+export interface WmsWatchlistItem {
+  odoo_ref: string;
+  product_name: string;
+  added_at?: string;
+}
+
+export async function loadWatchlist(): Promise<Set<string>> {
+  const { data, error } = await sb.from("wms_watchlist").select("odoo_ref");
+  if (error) throw new Error(error.message);
+  return new Set((data || []).map((r) => r.odoo_ref));
+}
+
+export async function saveWatchlist(items: WmsWatchlistItem[]): Promise<void> {
+  // Replace entire watchlist
+  await sb.from("wms_watchlist").delete().neq("odoo_ref", "");
+  if (!items.length) return;
+  const { error } = await sb.from("wms_watchlist").insert(items.map(i => ({ ...i, added_at: new Date().toISOString() })));
+  if (error) throw new Error(error.message);
+}

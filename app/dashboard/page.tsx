@@ -389,6 +389,8 @@ export default function Dashboard() {
   const [editVal, setEditVal] = useState("");
   const [stockSearch, setStockSearch] = useState("");
   const [thresholdsByRef, setThresholdsByRef] = useState<Record<string, number>>({});
+  const [watchlist, setWatchlist] = useState<Set<string>>(new Set());
+  const [watchlistMode, setWatchlistMode] = useState(false);
   const [consoSearch, setConsoSearch] = useState("");
 
   // Excel-like column filter states
@@ -421,6 +423,7 @@ export default function Dashboard() {
     // Load cache ages
     supa.getStockCacheAge().then(d => setStockSyncedAt(d));
     supa.getConsoCacheAge().then(d => setConsoSyncedAt(d));
+    supa.loadWatchlist().then(w => { setWatchlist(w); if (w.size > 0) setWatchlistMode(true); }).catch(() => {});
   }, [session]);
 
   const login = async () => { if (!url || !db || !user || !pw) return; setLoginLoading(true); setLoginError(""); try { const s = await odoo.authenticate({ url, db }, user, pw); saveSession(s); setSession(s); } catch (e: any) { setLoginError(e.message); } setLoginLoading(false); };
@@ -480,6 +483,8 @@ export default function Dashboard() {
       for (const [pidStr, data] of Object.entries(stockData)) {
         const pid = Number(pidStr);
         const thresh = t[pid];
+        // If watchlist mode, only alert on watched products
+        if (watchlistMode && watchlist.size > 0 && !watchlist.has(data.ref)) continue;
         if (thresh !== undefined && data.qty <= thresh) alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh });
       }
       alertList.sort((a, b) => (a.qty / a.threshold) - (b.qty / b.threshold));
@@ -873,8 +878,49 @@ export default function Dashboard() {
             {/* Threshold manager */}
             <div className="wms-card" style={{ padding: 24 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
-                <div><div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div><div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>Seuil = X mois de conso. Import Excel : col A = ref, col B = seuil.</div></div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>Gérer les seuils</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                    Seuil = conso 12 mois ÷ 12.
+                    {watchlist.size > 0 && <span style={{ marginLeft: 8, color: "var(--accent)", fontWeight: 600 }}>📋 {watchlist.size} produits en surveillance</span>}
+                  </div>
+                </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {/* Toggle watchlist mode */}
+                  <button className="wms-btn" onClick={() => setWatchlistMode(m => !m)} style={{ padding: "8px 14px", fontSize: 13, background: watchlistMode ? "var(--accent-soft)" : "var(--bg-surface)", color: watchlistMode ? "var(--accent)" : "var(--text-muted)", border: `1px solid ${watchlistMode ? "var(--accent-border)" : "var(--border)"}` }}>
+                    {watchlistMode ? "📋 Watchlist ON" : "📋 Tout afficher"}
+                  </button>
+                  {/* Upload watchlist Excel */}
+                  <label className="wms-btn" style={{ background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-border)", cursor: "pointer", padding: "8px 14px", fontSize: 13 }}>
+                    📥 Ma liste produits
+                    <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={async (e) => {
+                      const file = e.target.files?.[0]; if (!file) return;
+                      try {
+                        const XLSX = await import("xlsx");
+                        const data = await file.arrayBuffer();
+                        const wb = XLSX.read(data, { type: "array" });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const rows: any[] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+                        // Col A = ref (skip header if text)
+                        const items: supa.WmsWatchlistItem[] = [];
+                        for (const row of rows) {
+                          const ref = String(row[0] || "").trim();
+                          if (!ref || ref.toLowerCase() === "ref" || ref.toLowerCase() === "référence") continue;
+                          const name = String(row[1] || "").trim();
+                          // Find product name from stockMap if not provided
+                          const fromStock = Object.values(stockMap).find(s => s.ref === ref);
+                          items.push({ odoo_ref: ref, product_name: name || fromStock?.name || "" });
+                        }
+                        await supa.saveWatchlist(items);
+                        const newSet = new Set(items.map(i => i.odoo_ref));
+                        setWatchlist(newSet);
+                        setWatchlistMode(true);
+                        alert(`✓ ${items.length} produit(s) chargés en surveillance.\nMode watchlist activé.`);
+                        loadAlerts();
+                      } catch (err: any) { alert("Erreur: " + err.message); }
+                      e.target.value = "";
+                    }} />
+                  </label>
                   {/* Calculer et figer les seuils sur 12 mois */}
                   <button className="wms-btn" onClick={async () => {
                     if (!session) return;
@@ -955,7 +1001,10 @@ export default function Dashboard() {
               <input className="wms-input" value={stockSearch} onChange={(e) => setStockSearch(e.target.value)} placeholder="Filtrer par référence ou nom..." style={{ marginBottom: 16 }} />
               <div className="wms-scrollbar" style={{ maxHeight: 420, overflowY: "auto" }}>
                 {Object.keys(stockMap).length === 0 && !loading && <EmptyState icon={I.refresh} title='Cliquez sur "Actualiser"' sub="pour charger les produits" />}
-                {Object.entries(stockMap).filter(([, d]) => !stockSearch || d.ref.toLowerCase().includes(stockSearch.toLowerCase()) || d.name.toLowerCase().includes(stockSearch.toLowerCase())).map(([pidStr, data]) => {
+                {Object.entries(stockMap)
+                  .filter(([, d]) => !watchlistMode || watchlist.size === 0 || watchlist.has(d.ref))
+                  .filter(([, d]) => !stockSearch || d.ref.toLowerCase().includes(stockSearch.toLowerCase()) || d.name.toLowerCase().includes(stockSearch.toLowerCase()))
+                  .map(([pidStr, data]) => {
                   const pid = Number(pidStr); const { qty, name, ref } = data; const thresh = thresholds[pid]; const isAlert = thresh !== undefined && qty <= thresh;
                   const consoRow = conso.find((c) => c.ref === ref);
                   const suggestedThresh = consoRow && consoRow.avg > 0 ? consoRow.avg : null;
