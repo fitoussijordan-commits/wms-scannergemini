@@ -553,14 +553,18 @@ export default function Dashboard() {
       const months = monthsBack(consoMonths);
       let cacheItems: supa.WmsConsoCache[] = [];
 
-      // Use cache if fresh (< 2h), else sync from Odoo
+      // Check if cache covers the requested months + is fresh (< 2h)
       const cacheAge = await supa.getConsoCacheAge();
-      if (!supa.isCacheStale(cacheAge, 120)) {
+      const cachedMonthsCount = await supa.getCachedConsoMonthsCount();
+      const needMoreMonths = cachedMonthsCount < consoMonths;
+      if (!supa.isCacheStale(cacheAge, 120) && !needMoreMonths) {
         cacheItems = await supa.loadConsoCache(months);
         setConsoSyncedAt(cacheAge);
       } else {
-        const synced = await syncConsoFromOdoo(consoMonths);
-        if (synced) cacheItems = synced;
+        // Sync with max(consoMonths, 12) to always cache at least 12 months
+        const syncMonths = Math.max(consoMonths, 12);
+        const synced = await syncConsoFromOdoo(syncMonths);
+        if (synced) cacheItems = synced.filter(i => months.includes(i.month));
         else cacheItems = await supa.loadConsoCache(months);
       }
 

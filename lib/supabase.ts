@@ -94,6 +94,11 @@ export async function saveStockCache(items: WmsStockCache[]): Promise<void> {
 // CONSO CACHE
 // ══════════════════════════════════════════
 
+export async function getCachedConsoMonthsCount(): Promise<number> {
+  const { data } = await sb.from("wms_sync_meta").select("value").eq("key", "conso_months_count").single();
+  return data?.value ? Number(data.value) : 0;
+}
+
 export async function loadConsoCache(months: string[]): Promise<WmsConsoCache[]> {
   const { data, error } = await sb.from("wms_conso_cache").select("*").in("month", months);
   if (error) throw new Error(error.message);
@@ -115,10 +120,10 @@ export async function saveConsoCache(items: WmsConsoCache[]): Promise<void> {
     );
     if (error) throw new Error(error.message);
   }
-  await sb.from("wms_sync_meta").upsert(
+  await sb.from("wms_sync_meta").upsert([
     { key: "conso_synced_at", value: new Date().toISOString(), updated_at: new Date().toISOString() },
-    { onConflict: "key" }
-  );
+    { key: "conso_months_count", value: String(new Set(items.map(i => i.month)).size), updated_at: new Date().toISOString() },
+  ], { onConflict: "key" });
 }
 
 // ══════════════════════════════════════════
