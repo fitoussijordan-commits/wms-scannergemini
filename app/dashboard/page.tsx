@@ -946,19 +946,24 @@ export default function Dashboard() {
                       const custLocIds = custLocs.map((l: any) => l.id);
                       const intLocIds = intLocs.map((l: any) => l.id);
 
-                      const allLines = await odoo.searchRead(session, "stock.move.line", [
-                        ["state", "=", "done"],
-                        ["location_id", "in", intLocIds],
-                        ["location_dest_id", "in", custLocIds],
-                        ["date", ">=", sd],
-                        ["date", "<=", ed],
-                      ], ["product_id", "qty_done"], 20000);
-
-                      // Agrégation par produit — total 12 mois
+                      // Requête mois par mois pour éviter la limite 20000 lignes
                       const byPid: Record<number, number> = {};
-                      for (const m of allLines) {
-                        byPid[m.product_id[0]] = (byPid[m.product_id[0]] || 0) + (m.qty_done || 0);
+                      for (const month of ms) {
+                        const mStart = month + "-01 00:00:00";
+                        const mDate = new Date(Number(month.split("-")[0]), Number(month.split("-")[1]), 0);
+                        const mEnd = month + "-" + String(mDate.getDate()).padStart(2,"0") + " 23:59:59";
+                        const batch = await odoo.searchRead(session, "stock.move.line", [
+                          ["state", "=", "done"],
+                          ["location_id", "in", intLocIds],
+                          ["location_dest_id", "in", custLocIds],
+                          ["date", ">=", mStart],
+                          ["date", "<=", mEnd],
+                        ], ["product_id", "qty_done"], 10000);
+                        for (const mv of batch) {
+                          byPid[mv.product_id[0]] = (byPid[mv.product_id[0]] || 0) + (mv.qty_done || 0);
+                        }
                       }
+                      console.log("DEBUG 1010101 total apres batches=", byPid[Object.keys(byPid).find(k => true) as any]);
 
                       // Refs + noms
                       const pids = Object.keys(byPid).map(Number);
