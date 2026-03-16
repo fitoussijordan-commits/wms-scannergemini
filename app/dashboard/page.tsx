@@ -973,6 +973,7 @@ export default function Dashboard() {
                         const info = prodMap[pid];
                         if (!info?.ref) continue;
                         const seuil = Math.max(1, Math.round(total / 12));
+                        if (info.ref === "1010101") console.log("DEBUG 1010101 total=", total, "seuil=", seuil);
                         nt[pid] = seuil;
                         supaItems.push({ odoo_ref: info.ref, threshold: seuil, product_name: info.name });
                       }
