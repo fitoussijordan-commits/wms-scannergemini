@@ -445,149 +445,119 @@ export default function Dashboard() {
 
   // ── DATA LOADERS (logic 100% identical to original) ──
 
-  const syncStockFromOdoo = useCallback(async () => {
-    if (!session) return;
-    setSyncing(true);
-    try {
-      const quants = await odoo.searchRead(session, "stock.quant", [["location_id.usage", "=", "internal"], ["quantity", ">", 0]], ["product_id", "quantity"], 2000);
-      const byProduct: Record<number, { name: string; qty: number }> = {};
-      for (const q of quants) { const pid = q.product_id[0]; if (!byProduct[pid]) byProduct[pid] = { name: q.product_id[1], qty: 0 }; byProduct[pid].qty += q.quantity; }
-      const pids = Object.keys(byProduct).map(Number);
-      let refs: Record<number, string> = {};
-      if (pids.length) { const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 2000); refs = Object.fromEntries(prods.map((p: any) => [p.id, p.default_code || ""])); }
-      const items = Object.entries(byProduct).map(([id, v]) => ({ odoo_product_id: Number(id), odoo_ref: refs[Number(id)] || "", product_name: v.name, qty_on_hand: v.qty }));
-      await supa.saveStockCache(items);
-      const now = new Date(); setStockSyncedAt(now);
-      return items;
-    } catch (e: any) { console.warn("Stock sync failed:", e.message); return null; }
-    finally { setSyncing(false); }
-  }, [session]);
-
   const loadAlerts = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
-      let stockItems: supa.WmsStockCache[] | null = null;
+      const quants = await odoo.searchRead(session, "stock.quant", [
+        ["location_id.usage", "=", "internal"], ["quantity", ">", 0]
+      ], ["product_id", "quantity"], 2000);
 
-      // Use cache if fresh (< 30 min), else sync from Odoo
-      const cacheAge = await supa.getStockCacheAge();
-      if (!supa.isCacheStale(cacheAge, 30)) {
-        stockItems = await supa.loadStockCache();
-        setStockSyncedAt(cacheAge);
-      } else {
-        const synced = await syncStockFromOdoo();
-        if (synced) stockItems = synced.map(s => ({ ...s, synced_at: new Date().toISOString() }));
-        else stockItems = await supa.loadStockCache(); // fallback to stale cache
+      const byProduct: Record<number, { name: string; ref: string; qty: number }> = {};
+      for (const q of quants) {
+        const pid = q.product_id[0];
+        if (!byProduct[pid]) byProduct[pid] = { name: q.product_id[1], ref: "", qty: 0 };
+        byProduct[pid].qty += q.quantity;
+      }
+      const pids = Object.keys(byProduct).map(Number);
+      if (pids.length) {
+        const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code"], 2000);
+        for (const p of prods) if (byProduct[p.id]) byProduct[p.id].ref = p.default_code || "";
       }
 
-      if (!stockItems) { setLoading(false); return; }
+      const stockData: Record<number, { qty: number; name: string; ref: string }> = {};
+      for (const [id, v] of Object.entries(byProduct)) stockData[Number(id)] = v;
+      setStockMap(stockData);
+      setStockSyncedAt(new Date());
 
-      // Build stockMap from cache
-      const byPid: Record<number, { qty: number; name: string; ref: string }> = {};
-      for (const s of stockItems) byPid[s.odoo_product_id] = { qty: s.qty_on_hand, name: s.product_name, ref: s.odoo_ref };
-      setStockMap(byPid);
-
-      // Match thresholdsByRef to productIds now that we have refs
+      // Match thresholdsByRef → productIds
       const t: Record<number, number> = {};
-      for (const [pid, data] of Object.entries(byPid)) {
+      for (const [pid, data] of Object.entries(stockData)) {
         if (data.ref && thresholdsByRef[data.ref] !== undefined) t[Number(pid)] = thresholdsByRef[data.ref];
       }
       setThresholds(t);
 
       const alertList: StockAlert[] = [];
-      for (const [pidStr, data] of Object.entries(byPid)) {
+      for (const [pidStr, data] of Object.entries(stockData)) {
         const pid = Number(pidStr);
         const thresh = t[pid];
         if (thresh !== undefined && data.qty <= thresh) alertList.push({ productId: pid, ref: data.ref, name: data.name, qty: data.qty, threshold: thresh });
       }
       alertList.sort((a, b) => (a.qty / a.threshold) - (b.qty / b.threshold));
       setAlerts(alertList);
+
+      // Background: save stock cache to Supabase
+      const cacheItems = Object.entries(stockData).map(([id, v]) => ({
+        odoo_product_id: Number(id), odoo_ref: v.ref, product_name: v.name, qty_on_hand: v.qty
+      }));
+      supa.saveStockCache(cacheItems).catch(() => {});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, thresholdsByRef, syncStockFromOdoo]);
+  }, [session, thresholdsByRef]);
 
-  /*
-   * loadConso — Consommation mensuelle
-   * stock.move: state=done, location_id.usage=internal → location_dest_id.usage=customer.
-   * Queries stock.move.line (same model as Odoo pivot view).
-   * Measure: qty_done (= "Fait" column in Odoo 16 pivot).
-   * Filters: state=done, location_id.usage=internal, location_dest_id.usage=customer.
-   * This exactly matches the Odoo pivot at:
-   * stock.move.line > pivot > measure "Fait" > filtered outgoing
-   */
-  const syncConsoFromOdoo = useCallback(async (nMonths: number) => {
-    if (!session) return null;
-    setSyncing(true);
-    try {
-      const months = monthsBack(nMonths);
-      const startDate = months[0] + "-01 00:00:00";
-      const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
-      const allLines = await odoo.searchRead(session, "stock.move.line", [
-        ["state", "=", "done"], ["location_id.usage", "=", "internal"], ["location_dest_id.usage", "=", "customer"],
-        ["date", ">=", startDate], ["date", "<=", endDate],
-      ], ["product_id", "qty_done", "date"], 10000);
-
-      const byRef: Record<string, { name: string; months: Record<string, number> }> = {};
-      const pidToRef: Record<number, string> = {};
-      const pids = Array.from(new Set(allLines.map((ml: any) => ml.product_id[0]))) as number[];
-      if (pids.length) {
-        const prods = await odoo.searchRead(session, "product.product", [["id", "in", pids]], ["id", "default_code", "name"], 2000);
-        for (const p of prods) pidToRef[p.id] = p.default_code || String(p.id);
-      }
-      for (const ml of allLines) {
-        const ref = pidToRef[ml.product_id[0]] || ""; if (!ref) continue;
-        const month = (ml.date || "").substring(0, 7); if (!month) continue;
-        if (!byRef[ref]) byRef[ref] = { name: ml.product_id[1], months: {} };
-        byRef[ref].months[month] = (byRef[ref].months[month] || 0) + (ml.qty_done || 0);
-      }
-      const items: supa.WmsConsoCache[] = [];
-      for (const [ref, v] of Object.entries(byRef)) for (const [month, qty] of Object.entries(v.months)) items.push({ odoo_ref: ref, product_name: v.name, month, qty });
-      await supa.saveConsoCache(items);
-      const now = new Date(); setConsoSyncedAt(now);
-      return items;
-    } catch (e: any) { console.warn("Conso sync failed:", e.message); return null; }
-    finally { setSyncing(false); }
-  }, [session]);
 
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
     try {
       const months = monthsBack(consoMonths);
-      let cacheItems: supa.WmsConsoCache[] = [];
+      const startDate = months[0] + "-01 00:00:00";
+      const endDate = new Date().toISOString().split("T")[0] + " 23:59:59";
 
-      // Check if cache covers the requested months + is fresh (< 2h)
-      const cacheAge = await supa.getConsoCacheAge();
-      const cachedMonthsCount = await supa.getCachedConsoMonthsCount();
-      const needMoreMonths = cachedMonthsCount < consoMonths;
-      if (!supa.isCacheStale(cacheAge, 120) && !needMoreMonths) {
-        cacheItems = await supa.loadConsoCache(months);
-        setConsoSyncedAt(cacheAge);
-      } else {
-        // Sync with max(consoMonths, 12) to always cache at least 12 months
-        const syncMonths = Math.max(consoMonths, 12);
-        const synced = await syncConsoFromOdoo(syncMonths);
-        if (synced) cacheItems = synced.filter(i => months.includes(i.month));
-        else cacheItems = await supa.loadConsoCache(months);
+      const domain: any[] = [
+        ["state", "=", "done"],
+        ["location_id.usage", "=", "internal"],
+        ["location_dest_id.usage", "=", "customer"],
+        ["date", ">=", startDate],
+        ["date", "<=", endDate],
+      ];
+
+      if (consoSearch.trim()) {
+        const prods = await odoo.searchRead(session, "product.product", [
+          "|",
+          ["default_code", "=ilike", "%" + consoSearch.trim() + "%"],
+          ["name", "=ilike", "%" + consoSearch.trim() + "%"],
+        ], ["id"], 50);
+        const searchedProdIds = prods.map((p: any) => p.id);
+        if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
+        domain.push(["product_id", "in", searchedProdIds]);
       }
 
-      // Build rows from cache
-      const byRef: Record<string, { name: string; months: Record<string, number> }> = {};
-      for (const item of cacheItems) {
-        if (!byRef[item.odoo_ref]) byRef[item.odoo_ref] = { name: item.product_name, months: {} };
-        byRef[item.odoo_ref].months[item.month] = item.qty;
+      const allLines = await odoo.searchRead(session, "stock.move.line", domain,
+        ["product_id", "qty_done", "date"], 10000);
+
+      const byProd: Record<number, { name: string; ref: string; months: Record<string, number> }> = {};
+      for (const ml of allLines) {
+        const pid = ml.product_id[0];
+        const month = (ml.date || "").substring(0, 7);
+        if (!month) continue;
+        if (!byProd[pid]) byProd[pid] = { name: ml.product_id[1], ref: "", months: {} };
+        byProd[pid].months[month] = (byProd[pid].months[month] || 0) + (ml.qty_done || 0);
       }
 
-      // Apply search filter client-side
-      const search = consoSearch.trim().toLowerCase();
-      let rows: ConsoRow[] = Object.entries(byRef)
-        .filter(([ref, v]) => !search || ref.toLowerCase().includes(search) || v.name.toLowerCase().includes(search))
-        .map(([ref, v]) => ({
-          ref, name: v.name, months: v.months,
-          total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0,
-        }));
+      const prodIds = Object.keys(byProd).map(Number);
+      if (prodIds.length) {
+        const prods = await odoo.searchRead(session, "product.product", [["id", "in", prodIds]], ["id", "default_code"], 2000);
+        for (const p of prods) if (byProd[p.id]) byProd[p.id].ref = p.default_code || "";
+      }
+
+      const rows: ConsoRow[] = Object.entries(byProd).map(([, v]) => ({
+        ref: v.ref, name: v.name, months: v.months,
+        total: Object.values(v.months).reduce((s, n) => s + n, 0), avg: 0,
+      }));
       rows.sort((a, b) => b.total - a.total);
       rows.forEach(r => { r.avg = consoMonths > 0 ? Math.round(r.total / consoMonths) : 0; });
       setConso(rows);
+
+      // Async: save to Supabase cache in background (don't block UI)
+      const cacheItems: supa.WmsConsoCache[] = [];
+      for (const row of rows) {
+        for (const [month, qty] of Object.entries(row.months)) {
+          cacheItems.push({ odoo_ref: row.ref, product_name: row.name, month, qty });
+        }
+      }
+      supa.saveConsoCache(cacheItems).catch(() => {});
+      setConsoSyncedAt(new Date());
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [session, consoMonths, consoSearch, syncConsoFromOdoo]);
+  }, [session, consoMonths, consoSearch]);
+
 
   const loadDeliveries = useCallback(async () => {
     if (!session) return; setLoading(true); setError(""); setPrepStats([]);
