@@ -1545,7 +1545,7 @@ function ProductPicker({ product, lot, stock, srcName, onAdd, quickMode, dstName
       {/* Qty with +/- */}
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: C.text, marginBottom: 6 }}>Quantité</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 0, borderRadius: 10, overflow: "hidden", border: `1.5px solid ${C.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 0, borderRadius: 10, border: `1.5px solid ${C.border}`, overflow: "hidden", minHeight: 58 }}>
           <button onClick={() => { if (qty > 1) { setQty(qty - 1); vibrate(); } }} style={qtyBtn}>−</button>
           <input type="number" min="1" value={qty === 0 ? "" : qty}
             onChange={e => { const raw = e.target.value; if (raw === "") { setQty(0); return; } const v = parseInt(raw); if (!isNaN(v) && v >= 0) setQty(v); }}
@@ -4881,7 +4881,7 @@ const secondaryBtn: React.CSSProperties = {
 };
 
 const qtyBtn: React.CSSProperties = {
-  width: 56, background: C.bg, border: "none", fontSize: 22, fontWeight: 700, cursor: "pointer", color: C.blue, fontFamily: "inherit", padding: "12px 0",
+  minWidth: 56, width: 56, flexShrink: 0, background: C.bg, border: "none", fontSize: 28, fontWeight: 700, cursor: "pointer", color: C.blue, fontFamily: "inherit", padding: "14px 0", lineHeight: 1, touchAction: "manipulation",
 };
 
 // ============================================
