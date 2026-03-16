@@ -474,9 +474,9 @@ export default function Dashboard() {
 
   /*
    * loadConso — Consommation mensuelle
-   * If consoSearch is set: find product first, then query only its moves (instant).
-   * If empty: load all outgoing moves (slower but full picture).
-   * Uses picking_type_id.code dot-notation for outgoing filter.
+   * stock.move: state=done, location_id.usage=internal → location_dest_id.usage=customer.
+   * This catches the final leg of any delivery chain (PICK→PACK→OUT or direct OUT).
+   * product_qty = real quantity in product UoM.
    */
   const loadConso = useCallback(async () => {
     if (!session) return; setLoading(true); setError("");
@@ -487,20 +487,19 @@ export default function Dashboard() {
 
       const domain: any[] = [
         ["state", "=", "done"],
-        ["picking_type_id.code", "=", "outgoing"],
+        ["location_id.usage", "=", "internal"],
+        ["location_dest_id.usage", "=", "customer"],
         ["date", ">=", startDate],
         ["date", "<=", endDate],
       ];
 
-      // If searching for a specific product, add product filter (= fast query)
-      let searchedProdIds: number[] = [];
       if (consoSearch.trim()) {
         const prods = await odoo.searchRead(session, "product.product", [
           "|",
           ["default_code", "=ilike", "%" + consoSearch.trim() + "%"],
           ["name", "=ilike", "%" + consoSearch.trim() + "%"],
         ], ["id"], 50);
-        searchedProdIds = prods.map((p: any) => p.id);
+        const searchedProdIds = prods.map((p: any) => p.id);
         if (!searchedProdIds.length) { setConso([]); setLoading(false); return; }
         domain.push(["product_id", "in", searchedProdIds]);
       }
@@ -814,7 +813,9 @@ export default function Dashboard() {
                       const sd = ms[0] + "-01 00:00:00";
                       const ed = new Date().toISOString().split("T")[0] + " 23:59:59";
                       const allMoves = await odoo.searchRead(session, "stock.move", [
-                        ["state", "=", "done"], ["picking_type_id.code", "=", "outgoing"],
+                        ["state", "=", "done"],
+                        ["location_id.usage", "=", "internal"],
+                        ["location_dest_id.usage", "=", "customer"],
                         ["date", ">=", sd], ["date", "<=", ed],
                       ], ["product_id", "product_qty", "date"], 20000);
 
