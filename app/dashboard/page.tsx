@@ -932,7 +932,6 @@ export default function Dashboard() {
                   {/* Calculer et figer les seuils sur 12 mois */}
                   <button className="wms-btn" onClick={async () => {
                     if (!session) return;
-                    if (!confirm("Calculer et figer les seuils pour TOUS les produits ?\n\nFormule : seuil = conso totale 12 mois ÷ 12 (= 1 mois de conso moyenne)\n\nCette action écrase les seuils existants dans Supabase.")) return;
                     setLoading(true); setError("");
                     try {
                       // MÊME LOGIQUE QUE loadConso — copie exacte
